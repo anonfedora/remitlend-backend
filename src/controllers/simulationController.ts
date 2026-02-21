@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 
-export const getRemittanceHistory = (req: Request, res: Response) => {
+export const getRemittanceHistory = asyncHandler(async (req: Request, res: Response) => {
     const { userId } = req.params;
     // Mock data simulation
     const history = [
@@ -15,9 +16,9 @@ export const getRemittanceHistory = (req: Request, res: Response) => {
         streak: 3,
         history
     });
-};
+});
 
-export const simulatePayment = (req: Request, res: Response) => {
+export const simulatePayment = asyncHandler(async (req: Request, res: Response) => {
     const { userId, amount } = req.body;
     // Simulate payment logic
     res.json({
@@ -25,4 +26,4 @@ export const simulatePayment = (req: Request, res: Response) => {
         message: `Payment of ${amount} for user ${userId} simulated.`,
         newScore: 760
     });
-};
+});

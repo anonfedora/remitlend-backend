@@ -1,8 +1,13 @@
 import type { Request, Response, NextFunction } from 'express';
-import { z, type ZodSchema } from 'zod';
+import { type ZodSchema } from 'zod';
 
+/**
+ * Express middleware factory that validates incoming requests against
+ * a Zod schema. On validation failure the error is forwarded to the
+ * global error handler via `next(error)`.
+ */
 export const validate = (schema: ZodSchema) => {
-    return (req: Request, res: Response, next: NextFunction) => {
+    return (req: Request, _res: Response, next: NextFunction) => {
         try {
             schema.parse({
                 body: req.body,
@@ -11,21 +16,7 @@ export const validate = (schema: ZodSchema) => {
             });
             next();
         } catch (error) {
-            if (error instanceof z.ZodError) {
-                res.status(400).json({
-                    success: false,
-                    message: 'Validation failed',
-                    errors: error.issues.map((err: z.ZodIssue) => ({
-                        path: err.path.join('.'),
-                        message: err.message
-                    }))
-                });
-            } else {
-                res.status(500).json({
-                    success: false,
-                    message: 'Internal server error'
-                });
-            }
+            next(error);
         }
     };
 };

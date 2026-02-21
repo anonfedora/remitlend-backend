@@ -1,4 +1,4 @@
-import express, { type Request, type Response } from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 
@@ -8,6 +8,8 @@ import scoreRoutes from './routes/scoreRoutes.js';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from "./config/swagger.js";
 import { globalRateLimiter } from './middleware/rateLimiter.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { AppError } from './errors/AppError.js';
 
 const app = express();
 
@@ -47,5 +49,19 @@ app.use('/api', simulationRoutes);
 app.use('/api/score', scoreRoutes);
 
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+// ── 404 Catch-All ────────────────────────────────────────────────
+// Must be placed after all route definitions so that only truly
+// unmatched paths trigger a not-found error.
+// Express 5 uses path-to-regexp v8 which requires named params,
+// so we use a standard middleware function instead of app.all('*').
+app.use((req: Request, _res: Response, next: NextFunction) => {
+    next(AppError.notFound(`Cannot ${req.method} ${req.path}`));
+});
+
+// ── Global Error Handler ─────────────────────────────────────────
+// Must be the LAST middleware registered so it catches every error
+// forwarded via next(err) from routes and other middleware.
+app.use(errorHandler);
 
 export default app;
