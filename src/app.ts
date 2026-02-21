@@ -4,6 +4,7 @@ import express, {
   type NextFunction,
 } from "express";
 import cors from "cors";
+import compression from "compression";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -34,6 +35,7 @@ const corsOptions: cors.CorsOptions = {
 };
 
 app.use(cors(corsOptions));
+app.use(compression());
 app.use(express.json());
 app.use(globalRateLimiter);
 
