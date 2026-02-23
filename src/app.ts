@@ -18,7 +18,6 @@ import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { asyncHandler } from "./middleware/asyncHandler.js";
 import { AppError } from "./errors/AppError.js";
-
 const app = express();
 
 const isProduction = process.env.NODE_ENV === "production";
@@ -71,7 +70,7 @@ app.get("/", (req: Request, res: Response) => {
   res.send("RemitLend Backend is running");
 });
 
-app.get("/health", (req, res) => {
+app.get("/health", (req: Request, res: Response) => {
   res.status(200).json({
     status: "ok",
     uptime: process.uptime(),
