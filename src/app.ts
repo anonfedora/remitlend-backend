@@ -5,6 +5,7 @@ import express, {
 } from "express";
 import cors from "cors";
 import compression from "compression";
+import helmet from "helmet";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -19,6 +20,30 @@ import { asyncHandler } from "./middleware/asyncHandler.js";
 import { AppError } from "./errors/AppError.js";
 
 const app = express();
+
+const isProduction = process.env.NODE_ENV === "production";
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        "default-src": ["'self'"],
+        "script-src": ["'self'", "'unsafe-inline'"],
+        "style-src": ["'self'", "https:", "'unsafe-inline'"],
+        "img-src": ["'self'", "data:", "https:"],
+        "font-src": ["'self'", "https:", "data:"],
+        "frame-ancestors": ["'self'"],
+      },
+    },
+    strictTransportSecurity: isProduction
+      ? {
+          maxAge: 31536000,
+          includeSubDomains: true,
+          preload: true,
+        }
+      : false,
+  }),
+);
 
 const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
   ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
