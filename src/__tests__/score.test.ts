@@ -1,8 +1,19 @@
 import request from "supertest";
 import { jest } from "@jest/globals";
+import { generateJwtToken } from "../services/authService.js";
+
+type MockQueryResult = { rows: unknown[]; rowCount?: number };
+
+const VALID_API_KEY = "test-internal-key";
+
+// JWT and API key must be set before the app module loads (auth middleware).
+process.env.JWT_SECRET = "test-jwt-secret-min-32-chars-long!!";
+process.env.INTERNAL_API_KEY = VALID_API_KEY;
 
 // Setup mocks BEFORE importing the app or the module under test
-const mockQuery = jest.fn();
+const mockQuery: jest.MockedFunction<
+  (text: string, params?: unknown[]) => Promise<MockQueryResult>
+> = jest.fn();
 jest.unstable_mockModule("../db/connection.js", () => ({
   query: mockQuery,
   getClient: jest.fn(),
@@ -10,18 +21,18 @@ jest.unstable_mockModule("../db/connection.js", () => ({
 }));
 
 // Use dynamic imports to ensure mocks are applied
-const { query } = (await import("../db/connection.js")) as any;
-const { default: app } = (await import("../app.js")) as any;
+await import("../db/connection.js");
+const { default: app } = await import("../app.js");
 
-const mockedQuery = query as jest.Mock;
-const VALID_API_KEY = "test-internal-key";
+const mockedQuery = mockQuery;
 
-beforeAll(() => {
-  process.env.INTERNAL_API_KEY = VALID_API_KEY;
+const bearer = (publicKey: string) => ({
+  Authorization: `Bearer ${generateJwtToken(publicKey)}`,
 });
 
 afterAll(() => {
   delete process.env.INTERNAL_API_KEY;
+  delete process.env.JWT_SECRET;
   jest.clearAllMocks();
 });
 
@@ -29,10 +40,25 @@ afterAll(() => {
 // GET /api/score/:userId
 // ---------------------------------------------------------------------------
 describe("GET /api/score/:userId", () => {
+  it("should reject unauthenticated requests", async () => {
+    const response = await request(app).get("/api/score/user123");
+    expect(response.status).toBe(401);
+  });
+
+  it("should reject when path userId does not match JWT wallet", async () => {
+    const response = await request(app)
+      .get("/api/score/user123")
+      .set(bearer("other-wallet"));
+
+    expect(response.status).toBe(403);
+  });
+
   it("should return a score for a valid userId", async () => {
     mockedQuery.mockResolvedValueOnce({ rows: [{ current_score: 750 }] });
     
-    const response = await request(app).get("/api/score/user123");
+    const response = await request(app)
+      .get("/api/score/user123")
+      .set(bearer("user123"));
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -45,8 +71,8 @@ describe("GET /api/score/:userId", () => {
   it("should return the same score for the same userId", async () => {
     mockedQuery.mockResolvedValue({ rows: [{ current_score: 600 }] });
     
-    const r1 = await request(app).get("/api/score/alice");
-    const r2 = await request(app).get("/api/score/alice");
+    const r1 = await request(app).get("/api/score/alice").set(bearer("alice"));
+    const r2 = await request(app).get("/api/score/alice").set(bearer("alice"));
 
     expect(r1.body.score).toBe(r2.body.score);
   });
@@ -54,7 +80,9 @@ describe("GET /api/score/:userId", () => {
   it("should return 500 if user not found", async () => {
     mockedQuery.mockResolvedValueOnce({ rows: [] });
     
-    const response = await request(app).get("/api/score/newuser");
+    const response = await request(app)
+      .get("/api/score/newuser")
+      .set(bearer("newuser"));
 
     expect(response.status).toBe(200);
     expect(response.body.score).toBe(500);

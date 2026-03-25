@@ -6,6 +6,7 @@ export const SUPPORTED_WEBHOOK_EVENT_TYPES = [
   "LoanRequested",
   "LoanApproved",
   "LoanRepaid",
+  "LoanDefaulted",
 ] as const;
 
 export type WebhookEventType = (typeof SUPPORTED_WEBHOOK_EVENT_TYPES)[number];

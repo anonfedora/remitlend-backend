@@ -2,6 +2,10 @@ import dotenv from "dotenv";
 import app from "./app.js";
 import logger from "./utils/logger.js";
 import { startIndexer, stopIndexer } from "./services/indexerManager.js";
+import {
+  startDefaultCheckerScheduler,
+  stopDefaultCheckerScheduler,
+} from "./services/defaultChecker.js";
 
 dotenv.config();
 
@@ -12,17 +16,22 @@ app.listen(port, () => {
 
   // Start the event indexer
   startIndexer();
+
+  // Start periodic on-chain default checks (if configured)
+  startDefaultCheckerScheduler();
 });
 
 // Graceful shutdown
 process.on("SIGTERM", () => {
   logger.info("SIGTERM signal received: closing HTTP server");
   stopIndexer();
+  stopDefaultCheckerScheduler();
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
   logger.info("SIGINT signal received: closing HTTP server");
   stopIndexer();
+  stopDefaultCheckerScheduler();
   process.exit(0);
 });

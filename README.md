@@ -38,9 +38,42 @@ npm install
 # Copy environment variables
 cp .env.example .env
 
+# Apply database migrations (requires PostgreSQL and DATABASE_URL in .env)
+npm run migrate:up
+
 # Start development server
 npm run dev
 ```
+
+### Database and migrations
+
+The API expects a PostgreSQL database. Set `DATABASE_URL` in `.env` (see `.env.example`).
+
+Apply schema migrations from the `backend` directory:
+
+```bash
+npm run migrate:up
+```
+
+Rollback last batch (when needed):
+
+```bash
+npm run migrate:down
+```
+
+Core tables are created by these migrations (run in filename order):
+
+| Migration | Tables |
+|-----------|--------|
+| `1771691269865_initial-schema.js` | `scores`, `remittance_history` |
+| `1771691269866_loan-events-schema.js` | `loan_events`, `indexer_state` |
+| `1772000000000_webhook-subscriptions.js` | `webhook_subscriptions` |
+| `1773000000001_user-profiles.js` | `user_profiles` |
+| `1773000000002_loan-history.js` | `loan_history` |
+| `1773000000003_indexed-events.js` | `indexed_events` |
+| `1774000000004_scores-add-created-at.js` | adds `created_at` to `scores` (idempotent) |
+
+With Docker Compose from the repo root, the `backend` service runs `migrate:up` before `npm run dev` so the schema is applied automatically when the database is healthy.
 
 ### Environment Variables
 
@@ -63,6 +96,10 @@ CORS_ALLOWED_ORIGINS=http://localhost:3000
 ```bash
 # Development
 npm run dev          # Start dev server with hot reload
+
+# Database
+npm run migrate:up   # Apply migrations (requires DATABASE_URL)
+npm run migrate:down # Roll back last migration batch
 
 # Production
 npm run build        # Compile TypeScript to JavaScript

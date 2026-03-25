@@ -4,6 +4,10 @@ import { validate } from "../middleware/validation.js";
 import { getScoreSchema, updateScoreSchema } from "../schemas/scoreSchemas.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { strictRateLimiter } from "../middleware/rateLimiter.js";
+import {
+  requireJwtAuth,
+  requireWalletParamMatchesJwt,
+} from "../middleware/jwtAuth.js";
 
 const router = Router();
 
@@ -13,16 +17,18 @@ const router = Router();
  *   get:
  *     summary: Retrieve a user's credit score
  *     description: >
- *       Returns the current credit score, credit band, and key scoring factors
- *       for the specified user. Used by LoanManager and other contracts to
- *       make lending decisions.
+ *       Returns the current credit score for the authenticated wallet only:
+ *       `userId` must match the Stellar public key in the JWT.
  *     tags: [Score]
+ *     security:
+ *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: userId
  *         required: true
  *         schema:
  *           type: string
+ *         description: Must equal the JWT wallet (`publicKey`)
  *     responses:
  *       200:
  *         description: Score retrieved successfully.
@@ -36,8 +42,18 @@ const router = Router();
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: Missing or invalid Bearer token.
+ *       403:
+ *         description: userId does not match the authenticated wallet.
  */
-router.get("/:userId", validate(getScoreSchema), getScore);
+router.get(
+  "/:userId",
+  requireJwtAuth,
+  requireWalletParamMatchesJwt("userId"),
+  validate(getScoreSchema),
+  getScore,
+);
 
 /**
  * @swagger

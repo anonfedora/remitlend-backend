@@ -25,7 +25,15 @@ const swaggerDefinition = {
         type: "apiKey",
         in: "header",
         name: "x-api-key",
-        description: "Internal-only API key for administrative operations",
+        description:
+          "Internal API key (`INTERNAL_API_KEY`) for score workers, webhooks, and admin operations",
+      },
+      BearerAuth: {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "JWT",
+        description:
+          "JWT issued by POST /api/auth/login after POST /api/auth/challenge + signed message; use on GET /api/auth/verify and protected routes. Payload includes Stellar `publicKey`.",
       },
     },
     schemas: {
