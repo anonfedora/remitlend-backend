@@ -4,6 +4,9 @@ import {
   getBorrowerEvents,
   getLoanEvents,
   getRecentEvents,
+  listWebhookSubscriptions,
+  createWebhookSubscription,
+  deleteWebhookSubscription,
 } from "../controllers/indexerController.js";
 
 const router = Router();
@@ -115,5 +118,59 @@ router.get("/events/loan/:loanId", getLoanEvents);
  *         description: Events retrieved successfully
  */
 router.get("/events/recent", getRecentEvents);
+
+/**
+ * @swagger
+ * /indexer/webhooks:
+ *   get:
+ *     summary: List webhook subscriptions
+ *     tags: [Indexer]
+ *     responses:
+ *       200:
+ *         description: Webhook subscriptions retrieved successfully
+ *   post:
+ *     summary: Register a webhook subscription
+ *     tags: [Indexer]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [callbackUrl, eventTypes]
+ *             properties:
+ *               callbackUrl:
+ *                 type: string
+ *               eventTypes:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   enum: [LoanRequested, LoanApproved, LoanRepaid]
+ *               secret:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Webhook subscription created successfully
+ */
+router.get("/webhooks", listWebhookSubscriptions);
+router.post("/webhooks", createWebhookSubscription);
+
+/**
+ * @swagger
+ * /indexer/webhooks/{subscriptionId}:
+ *   delete:
+ *     summary: Delete a webhook subscription
+ *     tags: [Indexer]
+ *     parameters:
+ *       - in: path
+ *         name: subscriptionId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Webhook subscription deleted successfully
+ */
+router.delete("/webhooks/:subscriptionId", deleteWebhookSubscription);
 
 export default router;

@@ -1,6 +1,11 @@
 import { rpc, xdr } from "@stellar/stellar-sdk";
 import { query } from "../db/connection.js";
 import logger from "../utils/logger.js";
+import {
+  webhookService,
+  type IndexedLoanEvent,
+  type WebhookEventType,
+} from "./webhookService.js";
 
 interface IndexerConfig {
   rpcUrl: string;
@@ -9,9 +14,9 @@ interface IndexerConfig {
   batchSize: number;
 }
 
-interface LoanEvent {
+interface LoanEvent extends IndexedLoanEvent {
   eventId: string;
-  eventType: "LoanRequested" | "LoanApproved" | "LoanRepaid";
+  eventType: WebhookEventType;
   loanId?: number;
   borrower: string;
   amount?: string;
@@ -144,6 +149,17 @@ export class EventIndexer {
         }
       }
       await query("COMMIT", []);
+
+      await Promise.all(
+        events.map((event) =>
+          webhookService.deliverEvent(event).catch((error) => {
+            logger.error("Webhook delivery processing error", {
+              error,
+              eventId: event.eventId,
+            });
+          }),
+        ),
+      );
     } catch (err) {
       await query("ROLLBACK", []);
       throw err;
@@ -181,9 +197,7 @@ export class EventIndexer {
   private encodeSymbol(s: string) {
     return xdr.ScVal.scvSymbol(s).toXDR("base64");
   }
-  private decodeEventType(
-    x: xdr.ScVal,
-  ): "LoanRequested" | "LoanApproved" | "LoanRepaid" | null {
+  private decodeEventType(x: xdr.ScVal): WebhookEventType | null {
     try {
       const s = x.sym().toString();
       return s === "LoanRequested" || s === "LoanApproved" || s === "LoanRepaid"
