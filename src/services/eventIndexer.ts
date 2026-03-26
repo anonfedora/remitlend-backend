@@ -6,6 +6,7 @@ import {
   IndexedLoanEvent,
   webhookService,
 } from "./webhookService.js";
+import { eventStreamService } from "./eventStreamService.js";
 
 // Typing for raw Soroban events
 interface SorobanRawEvent {
@@ -169,6 +170,18 @@ export class EventIndexer {
         // Dispatch webhooks
         webhookService.dispatch(e).catch((err) => {
           logger.error(`Webhook dispatch failed for ${e.eventId}:`, err);
+        });
+
+        // Broadcast to SSE clients for real-time updates
+        eventStreamService.broadcast({
+          eventId: e.eventId,
+          eventType: e.eventType,
+          ...(e.loanId !== undefined ? { loanId: e.loanId } : {}),
+          borrower: e.borrower,
+          ...(e.amount !== undefined ? { amount: e.amount } : {}),
+          ledger: e.ledger,
+          ledgerClosedAt: e.ledgerClosedAt.toISOString(),
+          txHash: e.txHash,
         });
 
         // Trigger notifications

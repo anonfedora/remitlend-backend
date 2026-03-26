@@ -19,6 +19,7 @@ import indexerRoutes from "./routes/indexerRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import notificationsRoutes from "./routes/notificationsRoutes.js";
+import eventRoutes from "./routes/eventRoutes.js";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./config/swagger.js";
 import { globalRateLimiter } from "./middleware/rateLimiter.js";
@@ -118,6 +119,7 @@ app.use("/api/indexer", indexerRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/notifications", notificationsRoutes);
+app.use("/api/events", eventRoutes);
 
 // ── Diagnostic / Test Routes ─────────────────────────────────────
 // Only exposed in test environment to verify centralized error handling.

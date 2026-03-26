@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { query } from "../db/connection.js";
 import logger from "../utils/logger.js";
+import { AppError } from "../errors/AppError.js";
+import { sorobanService } from "../services/sorobanService.js";
 
 const LEDGER_CLOSE_SECONDS = 5;
 const DEFAULT_TERM_LEDGERS = 17280; // 1 day in ledgers
@@ -174,6 +176,140 @@ export const getLoanDetails = asyncHandler(
           tx: e.tx_hash,
         })),
       },
+    });
+  },
+);
+
+/**
+ * POST /api/loans/request
+ *
+ * Builds an unsigned Soroban request_loan(borrower, amount) transaction XDR.
+ * The frontend signs it with the user's wallet and submits via POST /api/loans/submit.
+ *
+ * Body: { amount: number, borrowerPublicKey: string }
+ */
+export const requestLoan = asyncHandler(
+  async (req: Request, res: Response) => {
+    const { amount, borrowerPublicKey } = req.body as {
+      amount: number;
+      borrowerPublicKey: string;
+    };
+
+    if (!borrowerPublicKey || !amount || amount <= 0) {
+      throw AppError.badRequest(
+        "borrowerPublicKey and a positive amount are required",
+      );
+    }
+
+    // Ensure the borrowerPublicKey matches the authenticated wallet
+    if (borrowerPublicKey !== req.user?.publicKey) {
+      throw AppError.forbidden(
+        "borrowerPublicKey must match your authenticated wallet",
+      );
+    }
+
+    const result = await sorobanService.buildRequestLoanTx(
+      borrowerPublicKey,
+      amount,
+    );
+
+    logger.info("Loan request transaction built", {
+      borrower: borrowerPublicKey,
+      amount,
+    });
+
+    res.json({
+      success: true,
+      unsignedTxXdr: result.unsignedTxXdr,
+      networkPassphrase: result.networkPassphrase,
+    });
+  },
+);
+
+/**
+ * POST /api/loans/:loanId/repay
+ *
+ * Builds an unsigned Soroban repay(borrower, loan_id, amount) transaction XDR.
+ * The frontend signs it with the user's wallet and submits via
+ * POST /api/loans/:loanId/submit.
+ *
+ * Body: { amount: number, borrowerPublicKey: string }
+ */
+export const repayLoan = asyncHandler(
+  async (req: Request, res: Response) => {
+    const loanId = req.params.loanId as string;
+    const { amount, borrowerPublicKey } = req.body as {
+      amount: number;
+      borrowerPublicKey: string;
+    };
+
+    if (!borrowerPublicKey || !amount || amount <= 0) {
+      throw AppError.badRequest(
+        "borrowerPublicKey and a positive amount are required",
+      );
+    }
+
+    // Ensure the borrowerPublicKey matches the authenticated wallet
+    if (borrowerPublicKey !== req.user?.publicKey) {
+      throw AppError.forbidden(
+        "borrowerPublicKey must match your authenticated wallet",
+      );
+    }
+
+    const loanIdNum = parseInt(loanId, 10);
+    if (!Number.isFinite(loanIdNum) || loanIdNum <= 0) {
+      throw AppError.badRequest("Invalid loan ID");
+    }
+
+    const result = await sorobanService.buildRepayTx(
+      borrowerPublicKey,
+      loanIdNum,
+      amount,
+    );
+
+    logger.info("Repay transaction built", {
+      borrower: borrowerPublicKey,
+      loanId: loanIdNum,
+      amount,
+    });
+
+    res.json({
+      success: true,
+      loanId: loanIdNum,
+      unsignedTxXdr: result.unsignedTxXdr,
+      networkPassphrase: result.networkPassphrase,
+    });
+  },
+);
+
+/**
+ * POST /api/loans/submit
+ * POST /api/loans/:loanId/submit
+ *
+ * Submits a signed transaction XDR to the Stellar network.
+ *
+ * Body: { signedTxXdr: string }
+ */
+export const submitTransaction = asyncHandler(
+  async (req: Request, res: Response) => {
+    const { signedTxXdr } = req.body as { signedTxXdr: string };
+
+    if (!signedTxXdr) {
+      throw AppError.badRequest("signedTxXdr is required");
+    }
+
+    const result = await sorobanService.submitSignedTx(signedTxXdr);
+
+    logger.info("Transaction submitted", {
+      txHash: result.txHash,
+      status: result.status,
+    });
+
+    res.json({
+      success: true,
+      txHash: result.txHash,
+      status: result.status,
+      ...(result.resultXdr ? { resultXdr: result.resultXdr } : {}),
     });
   },
 );
