@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { AppError } from "../errors/AppError.js";
+import { type UserRole } from "../auth/rbac.js";
 import {
   verifyJwtToken,
   extractBearerToken,
@@ -116,8 +117,9 @@ export const requireBorrower = (
   _res: Response,
   next: NextFunction,
 ): void => {
-  if (!req.user?.publicKey) {
-    throw AppError.unauthorized("Authentication required");
+  if (!req.user?.publicKey) throw AppError.unauthorized("Authentication required");
+  if (req.user.role !== "borrower" && req.user.role !== "admin") {
+    throw AppError.forbidden("Borrower role required");
   }
 
   next();
@@ -128,11 +130,49 @@ export const requireLender = (
   _res: Response,
   next: NextFunction,
 ): void => {
-  if (!req.user?.publicKey) {
-    throw AppError.unauthorized("Authentication required");
+  if (!req.user?.publicKey) throw AppError.unauthorized("Authentication required");
+  if (req.user.role !== "lender" && req.user.role !== "admin") {
+    throw AppError.forbidden("Lender role required");
   }
 
   next();
+};
+
+export const requireRoles = (...roles: UserRole[]) => {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (!req.user?.publicKey) {
+      throw AppError.unauthorized("Authentication required");
+    }
+
+    if (!roles.includes(req.user.role)) {
+      throw AppError.forbidden("Insufficient role permissions");
+    }
+
+    next();
+  };
+};
+
+export const requireScopes = (...requiredScopes: string[]) => {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (!req.user?.publicKey) {
+      throw AppError.unauthorized("Authentication required");
+    }
+
+    const grantedScopes = new Set(req.user.scopes ?? []);
+    if (grantedScopes.has("admin:all")) {
+      return next();
+    }
+
+    const missingScope = requiredScopes.find(
+      (scope) => !grantedScopes.has(scope),
+    );
+
+    if (missingScope) {
+      throw AppError.forbidden(`Missing required scope: ${missingScope}`);
+    }
+
+    next();
+  };
 };
 
 export { JwtPayload };

@@ -5,7 +5,7 @@ import {
   markAllRead,
   streamNotifications,
 } from "../controllers/notificationController.js";
-import { requireJwtAuth } from "../middleware/jwtAuth.js";
+import { requireJwtAuth, requireScopes } from "../middleware/jwtAuth.js";
 
 const router = Router();
 
@@ -42,7 +42,7 @@ const router = Router();
  *                     unreadCount:
  *                       type: integer
  */
-router.get("/", requireJwtAuth, getNotifications);
+router.get("/", requireJwtAuth, requireScopes("read:notifications"), getNotifications);
 
 /**
  * @swagger
@@ -56,7 +56,12 @@ router.get("/", requireJwtAuth, getNotifications);
  *       200:
  *         description: Server-Sent Events stream (text/event-stream)
  */
-router.get("/stream", requireJwtAuth, streamNotifications);
+router.get(
+  "/stream",
+  requireJwtAuth,
+  requireScopes("read:notifications"),
+  streamNotifications,
+);
 
 /**
  * @swagger
@@ -81,7 +86,12 @@ router.get("/stream", requireJwtAuth, streamNotifications);
  *       200:
  *         description: Notifications marked as read
  */
-router.post("/mark-read", requireJwtAuth, markRead);
+router.post(
+  "/mark-read",
+  requireJwtAuth,
+  requireScopes("write:notifications"),
+  markRead,
+);
 
 /**
  * @swagger
@@ -95,6 +105,11 @@ router.post("/mark-read", requireJwtAuth, markRead);
  *       200:
  *         description: All notifications marked as read
  */
-router.post("/mark-all-read", requireJwtAuth, markAllRead);
+router.post(
+  "/mark-all-read",
+  requireJwtAuth,
+  requireScopes("write:notifications"),
+  markAllRead,
+);
 
 export default router;

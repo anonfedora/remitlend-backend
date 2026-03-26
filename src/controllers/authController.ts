@@ -79,6 +79,8 @@ export const verify = (req: Request, res: Response): void => {
     success: true,
     data: {
       publicKey: req.user?.publicKey,
+      role: req.user?.role,
+      scopes: req.user?.scopes,
       valid: true,
     },
   });

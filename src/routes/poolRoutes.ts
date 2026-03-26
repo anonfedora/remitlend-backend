@@ -4,7 +4,9 @@ import {
   getDepositorPortfolio,
 } from "../controllers/poolController.js";
 import {
+  requireLender,
   requireJwtAuth,
+  requireScopes,
   requireWalletParamMatchesJwt,
 } from "../middleware/jwtAuth.js";
 import { validate } from "../middleware/validation.js";
@@ -49,7 +51,7 @@ const router = Router();
  *       401:
  *         description: Missing or invalid Bearer token
  */
-router.get("/stats", requireJwtAuth, getPoolStats);
+router.get("/stats", requireJwtAuth, requireLender, requireScopes("read:pool"), getPoolStats);
 
 /**
  * @swagger
@@ -80,6 +82,8 @@ router.get("/stats", requireJwtAuth, getPoolStats);
 router.get(
   "/depositor/:address",
   requireJwtAuth,
+  requireLender,
+  requireScopes("read:pool"),
   requireWalletParamMatchesJwt("address"),
   validate(addressParamSchema),
   getDepositorPortfolio,

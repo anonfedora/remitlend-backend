@@ -11,6 +11,7 @@ import {
 import { requireApiKey } from "../middleware/auth.js";
 import {
   requireJwtAuth,
+  requireScopes,
   requireWalletOwnership,
 } from "../middleware/jwtAuth.js";
 import { requireLoanBorrowerAccess } from "../middleware/loanAccess.js";
@@ -90,6 +91,7 @@ router.get("/status", getIndexerStatus);
 router.get(
   "/events/borrower/:borrower",
   requireJwtAuth,
+  requireScopes("read:loans"),
   requireWalletOwnership,
   getBorrowerEvents,
 );
@@ -122,6 +124,7 @@ router.get(
 router.get(
   "/events/loan/:loanId",
   requireJwtAuth,
+  requireScopes("read:loans"),
   requireLoanBorrowerAccess,
   getLoanEvents,
 );

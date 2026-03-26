@@ -8,6 +8,7 @@ import {
 } from "../controllers/loanController.js";
 import {
   requireJwtAuth,
+  requireScopes,
   requireWalletOwnership,
 } from "../middleware/jwtAuth.js";
 import { requireLoanBorrowerAccess } from "../middleware/loanAccess.js";
@@ -51,6 +52,7 @@ const router = Router();
 router.get(
   "/borrower/:borrower",
   requireJwtAuth,
+  requireScopes("read:loans"),
   requireWalletOwnership,
   validate(borrowerParamSchema),
   getBorrowerLoans,
@@ -85,6 +87,7 @@ router.get(
 router.get(
   "/:loanId",
   requireJwtAuth,
+  requireScopes("read:loans"),
   requireLoanBorrowerAccess,
   getLoanDetails,
 );

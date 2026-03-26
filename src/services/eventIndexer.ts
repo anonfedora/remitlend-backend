@@ -1,14 +1,14 @@
-import { SorobanRpc, xdr, scValToNative } from "@stellar/stellar-sdk";
+import { rpc as SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { query } from "../db/connection.js";
 import logger from "../utils/logger.js";
+import { createRequestId, runWithRequestContext } from "../utils/requestContext.js";
 import {
-  WebhookEventType,
-  IndexedLoanEvent,
+  type IndexedLoanEvent,
+  type WebhookEventType,
   webhookService,
 } from "./webhookService.js";
 import { eventStreamService } from "./eventStreamService.js";
 
-// Typing for raw Soroban events
 interface SorobanRawEvent {
   id: string;
   pagingToken: string;
@@ -34,168 +34,456 @@ interface LoanEvent extends IndexedLoanEvent {
   termLedgers?: number;
 }
 
-export class EventIndexer {
-  private rpc: SorobanRpc.Server;
-  private contractId: string;
+interface EventIndexerConfig {
+  rpcUrl: string;
+  contractId: string;
+  pollIntervalMs?: number;
+  batchSize?: number;
+}
 
-  constructor(rpcUrl: string, contractId: string) {
-    this.rpc = new SorobanRpc.Server(rpcUrl);
-    this.contractId = contractId;
+interface StoreEventsResult {
+  insertedCount: number;
+}
+
+interface ProcessChunkResult {
+  lastProcessedLedger: number;
+  fetchedEvents: number;
+  insertedEvents: number;
+}
+
+export class EventIndexer {
+  private readonly rpc: SorobanRpc.Server;
+  private readonly contractId: string;
+  private readonly pollIntervalMs: number;
+  private readonly batchSize: number;
+  private running = false;
+  private pollTimeout: NodeJS.Timeout | null = null;
+
+  constructor(config: EventIndexerConfig);
+  constructor(rpcUrl: string, contractId: string);
+  constructor(configOrRpcUrl: EventIndexerConfig | string, contractId?: string) {
+    if (typeof configOrRpcUrl === "string") {
+      if (!contractId) {
+        throw new Error("contractId is required when using rpcUrl constructor");
+      }
+      this.rpc = new SorobanRpc.Server(configOrRpcUrl);
+      this.contractId = contractId;
+      this.pollIntervalMs = 30_000;
+      this.batchSize = 100;
+      return;
+    }
+
+    this.rpc = new SorobanRpc.Server(configOrRpcUrl.rpcUrl);
+    this.contractId = configOrRpcUrl.contractId;
+    this.pollIntervalMs = configOrRpcUrl.pollIntervalMs ?? 30_000;
+    this.batchSize = configOrRpcUrl.batchSize ?? 100;
   }
 
-  /**
-   * Main entry point to process contract events from a sequence range
-   */
+  async start(): Promise<void> {
+    if (this.running) {
+      logger.warn("Indexer start requested while already running");
+      return;
+    }
+
+    this.running = true;
+    await this.pollOnce();
+    this.scheduleNextPoll();
+  }
+
+  stop(): void {
+    this.running = false;
+    if (this.pollTimeout) {
+      clearTimeout(this.pollTimeout);
+      this.pollTimeout = null;
+    }
+  }
+
   async processEvents(startLedger: number, endLedger: number): Promise<number> {
+    const chunkResult = await this.processChunk(startLedger, endLedger);
+    return chunkResult.lastProcessedLedger;
+  }
+
+  async reindexRange(fromLedger: number, toLedger: number): Promise<{
+    fromLedger: number;
+    toLedger: number;
+    fetchedEvents: number;
+    insertedEvents: number;
+    lastProcessedLedger: number;
+  }> {
+    let current = fromLedger;
+    let totalFetched = 0;
+    let totalInserted = 0;
+    let lastProcessedLedger = fromLedger - 1;
+
+    while (current <= toLedger) {
+      const chunkEnd = Math.min(current + this.batchSize - 1, toLedger);
+      const result = await this.processChunk(current, chunkEnd);
+
+      totalFetched += result.fetchedEvents;
+      totalInserted += result.insertedEvents;
+      lastProcessedLedger = result.lastProcessedLedger;
+      current = chunkEnd + 1;
+    }
+
+    return {
+      fromLedger,
+      toLedger,
+      fetchedEvents: totalFetched,
+      insertedEvents: totalInserted,
+      lastProcessedLedger,
+    };
+  }
+
+  private scheduleNextPoll(): void {
+    if (!this.running) return;
+
+    this.pollTimeout = setTimeout(async () => {
+      try {
+        await this.pollOnce();
+      } catch (error) {
+        logger.error("Indexer poll iteration failed", { error });
+      } finally {
+        this.scheduleNextPoll();
+      }
+    }, this.pollIntervalMs);
+  }
+
+  private async pollOnce(): Promise<void> {
+    if (!this.running) return;
+
+    const lastIndexedLedger = await this.getLastIndexedLedger();
+    const latestLedger = await this.getLatestLedgerSequence();
+
+    if (latestLedger <= lastIndexedLedger) {
+      return;
+    }
+
+    const fromLedger = lastIndexedLedger + 1;
+    const toLedger = Math.min(fromLedger + this.batchSize - 1, latestLedger);
+
+    const result = await this.processChunk(fromLedger, toLedger);
+    await this.updateLastIndexedLedger(result.lastProcessedLedger);
+  }
+
+  private async getLatestLedgerSequence(): Promise<number> {
     try {
-      const response = await this.rpc.getEvents({
+      const latest = (await (this.rpc as unknown as {
+        getLatestLedger: () => Promise<Record<string, unknown>>;
+      }).getLatestLedger()) as Record<string, unknown>;
+
+      const candidate =
+        latest.sequence ?? latest.sequenceNumber ?? latest.seq ?? latest.id;
+      const sequence = Number(candidate);
+
+      return Number.isFinite(sequence) && sequence > 0 ? sequence : 0;
+    } catch (error) {
+      logger.warn("Failed to fetch latest ledger sequence", { error });
+      return 0;
+    }
+  }
+
+  private async getLastIndexedLedger(): Promise<number> {
+    const result = await query(
+      `SELECT last_indexed_ledger
+       FROM indexer_state
+       ORDER BY id DESC
+       LIMIT 1`,
+      [],
+    );
+
+    if (!result.rows.length) {
+      await query(
+        `INSERT INTO indexer_state (last_indexed_ledger)
+         VALUES (0)`,
+        [],
+      );
+      return 0;
+    }
+
+    return Number(result.rows[0]?.last_indexed_ledger ?? 0);
+  }
+
+  private async updateLastIndexedLedger(ledger: number): Promise<void> {
+    const updateResult = await query(
+      `UPDATE indexer_state
+       SET last_indexed_ledger = GREATEST(last_indexed_ledger, $1),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = (
+         SELECT id
+         FROM indexer_state
+         ORDER BY id DESC
+         LIMIT 1
+       )`,
+      [ledger],
+    );
+
+    if ((updateResult.rowCount ?? 0) === 0) {
+      await query(
+        `INSERT INTO indexer_state (last_indexed_ledger)
+         VALUES ($1)`,
+        [ledger],
+      );
+    }
+  }
+
+  private async processChunk(
+    startLedger: number,
+    endLedger: number,
+  ): Promise<ProcessChunkResult> {
+    const correlationId = `indexer-${createRequestId()}`;
+
+    return runWithRequestContext(correlationId, async () => {
+      if (endLedger < startLedger) {
+        return {
+          lastProcessedLedger: endLedger,
+          fetchedEvents: 0,
+          insertedEvents: 0,
+        };
+      }
+
+      try {
+        const events = await this.fetchEventsInRange(startLedger, endLedger);
+        if (events.length === 0) {
+          return {
+            lastProcessedLedger: endLedger,
+            fetchedEvents: 0,
+            insertedEvents: 0,
+          };
+        }
+
+        const storeResult = await this.storeEvents(events);
+        const maxLedger = events.reduce(
+          (max, event) => Math.max(max, Number(event.ledger)),
+          startLedger,
+        );
+
+        logger.info("Indexer processed chunk", {
+          startLedger,
+          endLedger,
+          fetchedEvents: events.length,
+          insertedEvents: storeResult.insertedCount,
+        });
+
+        return {
+          lastProcessedLedger: Math.max(maxLedger, endLedger),
+          fetchedEvents: events.length,
+          insertedEvents: storeResult.insertedCount,
+        };
+      } catch (error) {
+        logger.error("Error processing event chunk", {
+          startLedger,
+          endLedger,
+          error,
+        });
+        throw error;
+      }
+    });
+  }
+
+  private async fetchEventsInRange(
+    startLedger: number,
+    endLedger: number,
+  ): Promise<SorobanRawEvent[]> {
+    const result: SorobanRawEvent[] = [];
+    let cursor: string | undefined;
+    let hasMorePages = true;
+
+    while (hasMorePages) {
+      const response = (await this.rpc.getEvents({
         startLedger,
+        endLedger,
+        cursor,
+        limit: this.batchSize,
         filters: [
           {
             type: "contract",
             contractIds: [this.contractId],
           },
         ],
-      });
+      } as never)) as unknown as {
+        events?: SorobanRawEvent[];
+        cursor?: string;
+        nextCursor?: string;
+      };
 
-      const events = response.events as unknown as SorobanRawEvent[];
-      if (events.length === 0) return endLedger;
+      const events = (response.events ?? []).filter(
+        (event) => event.ledger >= startLedger && event.ledger <= endLedger,
+      );
 
-      logger.info(`Found ${events.length} events from contract ${this.contractId}`);
+      result.push(...events);
 
-      const processed = await this.storeEvents(events);
-      return processed;
-    } catch (error) {
-      logger.error("Error processing events:", error);
-      throw error;
+      const nextCursor = response.nextCursor ?? response.cursor;
+      if (!nextCursor || nextCursor === cursor || events.length === 0) {
+        hasMorePages = false;
+        continue;
+      }
+
+      cursor = nextCursor;
     }
+
+    return result;
   }
 
-  private async storeEvents(events: SorobanRawEvent[]): Promise<number> {
-    const result: LoanEvent[] = [];
+  private async storeEvents(events: SorobanRawEvent[]): Promise<StoreEventsResult> {
+    const parsedEvents: LoanEvent[] = [];
 
-    for (const e of events) {
+    for (const event of events) {
       try {
-        const type = this.decodeEventType(e.topic[0]);
-        if (!type) continue;
-
-        let borrower = "";
-        let loanId: number | undefined;
-        let amount: string | undefined;
-        let interestRateBps: number | undefined;
-        let termLedgers: number | undefined;
-
-        if (type === "LoanRequested") {
-          borrower = this.decodeAddress(e.topic[1]);
-          amount = this.decodeAmount(e.value);
-        } else if (type === "LoanApproved") {
-          loanId = this.decodeLoanId(e.topic[1]);
-          if (loanId === undefined) continue;
-          // Capture current contract defaults at time of approval
-          interestRateBps = 1200; // Matches contract DEFAULT_INTEREST_RATE_BPS
-          termLedgers = 17280; // Matches contract DEFAULT_TERM_LEDGERS
-        } else if (type === "LoanRepaid") {
-          if (!e.topic[2]) continue;
-          borrower = this.decodeAddress(e.topic[1]);
-          loanId = this.decodeLoanId(e.topic[2]);
-          amount = this.decodeAmount(e.value);
-        } else if (type === "LoanDefaulted") {
-          loanId = this.decodeLoanId(e.topic[1]);
-          if (loanId === undefined) continue;
-          borrower = this.decodeAddress(e.value);
-        } else if (type === "Seized") {
-          borrower = this.decodeAddress(e.topic[1]);
+        const parsed = this.parseEvent(event);
+        if (parsed) {
+          parsedEvents.push(parsed);
         }
-
-        const evt: LoanEvent = {
-          eventId: e.id,
-          eventType: type,
-          ledger: e.ledger,
-          ledgerClosedAt: new Date(e.ledgerClosedAt),
-          txHash: e.txHash,
-          contractId: e.contractId.toString(),
-          topics: e.topic.map((t) => t.toXDR("base64")),
-          value: e.value.toXDR("base64"),
-          ...(amount !== undefined ? { amount } : {}),
-          ...(loanId !== undefined ? { loanId } : {}),
-          ...(interestRateBps !== undefined ? { interestRateBps } : {}),
-          ...(termLedgers !== undefined ? { termLedgers } : {}),
-          borrower,
-        };
-        result.push(evt);
-      } catch (err) {
-        logger.warn(`Failed to parse event ${e.id}:`, err);
+      } catch (error) {
+        logger.warn("Failed to parse event", {
+          eventId: event.id,
+          error,
+        });
       }
     }
 
-    if (result.length === 0) return events[events.length - 1].ledger;
+    if (parsedEvents.length === 0) {
+      return { insertedCount: 0 };
+    }
 
-    // Use transaction for database insertion
+    const insertedEvents: LoanEvent[] = [];
+
     await query("BEGIN", []);
     try {
-      for (const e of result) {
-        // Check for duplicates
-        const ex = await query(
-          "SELECT 1 FROM loan_events WHERE event_id = $1",
-          [e.eventId],
-        );
-        if (ex.rows.length) continue;
-        await query(
-          `INSERT INTO loan_events (event_id, event_type, loan_id, borrower, amount, ledger, ledger_closed_at, tx_hash, contract_id, topics, value, interest_rate_bps, term_ledgers)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      for (const event of parsedEvents) {
+        const insertResult = await query(
+          `INSERT INTO loan_events (
+            event_id,
+            event_type,
+            loan_id,
+            borrower,
+            amount,
+            ledger,
+            ledger_closed_at,
+            tx_hash,
+            contract_id,
+            topics,
+            value,
+            interest_rate_bps,
+            term_ledgers
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          ON CONFLICT (event_id) DO NOTHING
+          RETURNING event_id`,
           [
-            e.eventId,
-            e.eventType,
-            e.loanId || null,
-            e.borrower || null,
-            e.amount || null,
-            e.ledger,
-            e.ledgerClosedAt,
-            e.txHash,
-            e.contractId,
-            JSON.stringify(e.topics),
-            e.value,
-            e.interestRateBps || null,
-            e.termLedgers || null,
+            event.eventId,
+            event.eventType,
+            event.loanId ?? null,
+            event.borrower || null,
+            event.amount ?? null,
+            event.ledger,
+            event.ledgerClosedAt,
+            event.txHash,
+            event.contractId,
+            JSON.stringify(event.topics),
+            event.value,
+            event.interestRateBps ?? null,
+            event.termLedgers ?? null,
           ],
         );
 
-        // Update score in bi-directional way (increase on repay, decrease on default)
-        if (e.eventType === "LoanRepaid") {
-          await this.updateUserScore(e.borrower, 15); // +15 for repayment
-        } else if (e.eventType === "LoanDefaulted") {
-          await this.updateUserScore(e.borrower, -50); // penalty for default
+        if ((insertResult.rowCount ?? 0) > 0) {
+          insertedEvents.push(event);
+          if (event.eventType === "LoanRepaid") {
+            await this.updateUserScore(event.borrower, 15);
+          } else if (event.eventType === "LoanDefaulted") {
+            await this.updateUserScore(event.borrower, -50);
+          }
         }
-
-        // Dispatch webhooks
-        webhookService.dispatch(e).catch((err) => {
-          logger.error(`Webhook dispatch failed for ${e.eventId}:`, err);
-        });
-
-        // Broadcast to SSE clients for real-time updates
-        eventStreamService.broadcast({
-          eventId: e.eventId,
-          eventType: e.eventType,
-          ...(e.loanId !== undefined ? { loanId: e.loanId } : {}),
-          borrower: e.borrower,
-          ...(e.amount !== undefined ? { amount: e.amount } : {}),
-          ledger: e.ledger,
-          ledgerClosedAt: e.ledgerClosedAt.toISOString(),
-          txHash: e.txHash,
-        });
-
-        // Trigger notifications
-        this.triggerNotification(e).catch((err) => {
-          logger.error(`Notification trigger failed for ${e.eventId}:`, err);
-        });
       }
+
       await query("COMMIT", []);
-    } catch (err) {
+    } catch (error) {
       await query("ROLLBACK", []);
-      throw err;
+      throw error;
     }
 
-    return events[events.length - 1].ledger;
+    for (const event of insertedEvents) {
+      webhookService.dispatch(event).catch((error) => {
+        logger.error("Webhook dispatch failed", {
+          eventId: event.eventId,
+          error,
+        });
+      });
+
+      eventStreamService.broadcast({
+        eventId: event.eventId,
+        eventType: event.eventType,
+        ...(event.loanId !== undefined ? { loanId: event.loanId } : {}),
+        borrower: event.borrower,
+        ...(event.amount !== undefined ? { amount: event.amount } : {}),
+        ledger: event.ledger,
+        ledgerClosedAt: event.ledgerClosedAt.toISOString(),
+        txHash: event.txHash,
+      });
+
+      this.triggerNotification(event).catch((error) => {
+        logger.error("Notification trigger failed", {
+          eventId: event.eventId,
+          error,
+        });
+      });
+    }
+
+    return {
+      insertedCount: insertedEvents.length,
+    };
+  }
+
+  private parseEvent(event: SorobanRawEvent): LoanEvent | null {
+    const type = this.decodeEventType(event.topic[0]);
+    if (!type) return null;
+
+    let borrower = "";
+    let loanId: number | undefined;
+    let amount: string | undefined;
+    let interestRateBps: number | undefined;
+    let termLedgers: number | undefined;
+
+    if (type === "LoanRequested") {
+      if (!event.topic[1]) return null;
+      borrower = this.decodeAddress(event.topic[1]);
+      amount = this.decodeAmount(event.value);
+    } else if (type === "LoanApproved") {
+      if (!event.topic[1]) return null;
+      loanId = this.decodeLoanId(event.topic[1]);
+      if (loanId === undefined) return null;
+      interestRateBps = 1200;
+      termLedgers = 17280;
+    } else if (type === "LoanRepaid") {
+      if (!event.topic[1] || !event.topic[2]) return null;
+      borrower = this.decodeAddress(event.topic[1]);
+      loanId = this.decodeLoanId(event.topic[2]);
+      amount = this.decodeAmount(event.value);
+    } else if (type === "LoanDefaulted") {
+      if (!event.topic[1]) return null;
+      loanId = this.decodeLoanId(event.topic[1]);
+      if (loanId === undefined) return null;
+      borrower = this.decodeAddress(event.value);
+    } else if (type === "Seized") {
+      if (!event.topic[1]) return null;
+      borrower = this.decodeAddress(event.topic[1]);
+    }
+
+    return {
+      eventId: event.id,
+      eventType: type,
+      ledger: event.ledger,
+      ledgerClosedAt: new Date(event.ledgerClosedAt),
+      txHash: event.txHash,
+      contractId: event.contractId.toString(),
+      topics: event.topic.map((topic) => topic.toXDR("base64")),
+      value: event.value.toXDR("base64"),
+      ...(amount !== undefined ? { amount } : {}),
+      ...(loanId !== undefined ? { loanId } : {}),
+      ...(interestRateBps !== undefined ? { interestRateBps } : {}),
+      ...(termLedgers !== undefined ? { termLedgers } : {}),
+      borrower,
+    };
   }
 
   private async updateUserScore(userId: string, delta: number): Promise<void> {
@@ -204,74 +492,82 @@ export class EventIndexer {
       await query(
         `INSERT INTO scores (user_id, current_score)
          VALUES ($1, $2)
-         ON CONFLICT (user_id) 
-         DO UPDATE SET 
+         ON CONFLICT (user_id)
+         DO UPDATE SET
            current_score = LEAST(850, GREATEST(300, scores.current_score + $3)),
            updated_at = CURRENT_TIMESTAMP`,
         [userId, 500 + delta, delta],
       );
-      logger.info(`Updated score for user ${userId} by ${delta} points`);
+      logger.info("Updated user score from indexed event", {
+        userId,
+        delta,
+      });
     } catch (error) {
-      logger.error(`Failed to update score for user ${userId}:`, error);
+      logger.error("Failed to update user score", { userId, error });
     }
   }
 
   private async triggerNotification(event: LoanEvent): Promise<void> {
     if (!event.borrower) return;
 
+    let type = "";
     let title = "";
     let message = "";
 
     switch (event.eventType) {
       case "LoanApproved":
+        type = "loan_approved";
         title = "Loan Approved";
         message = event.loanId
           ? `Your loan #${event.loanId} has been approved.`
           : "Your loan has been approved.";
         break;
       case "LoanRepaid":
+        type = "repayment_confirmed";
         title = "Repayment Confirmed";
         message = event.loanId
           ? `Repayment for loan #${event.loanId} has been confirmed.`
           : "Your loan repayment has been confirmed.";
         break;
       case "LoanDefaulted":
+        type = "loan_defaulted";
         title = "Loan Defaulted";
         message = event.loanId
           ? `Loan #${event.loanId} has been marked as defaulted.`
           : "A loan has been marked as defaulted.";
         break;
+      default:
+        return;
     }
 
-    if (title && message) {
-      await query(
-        `INSERT INTO notifications (user_id, title, message, loan_id)
-         VALUES ($1, $2, $3, $4)`,
-        [event.borrower, title, message, event.loanId || null],
-      );
-    }
+    await query(
+      `INSERT INTO notifications (user_id, type, title, message, loan_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [event.borrower, type, title, message, event.loanId ?? null],
+    );
   }
 
-  // Decoding helpers
-  private decodeAddress(x: xdr.ScVal): string {
-    return scValToNative(x).toString();
+  private decodeAddress(value: xdr.ScVal): string {
+    return scValToNative(value).toString();
   }
 
-  private decodeAmount(x: xdr.ScVal): string {
-    return scValToNative(x).toString(); // BigInt amount
+  private decodeAmount(value: xdr.ScVal): string {
+    return scValToNative(value).toString();
   }
 
-  private decodeLoanId(x: xdr.ScVal): number | undefined {
+  private decodeLoanId(value: xdr.ScVal): number | undefined {
     try {
-      return Number(scValToNative(x));
+      return Number(scValToNative(value));
     } catch {
       return undefined;
     }
   }
 
-  private decodeEventType(x: xdr.ScVal): WebhookEventType | null {
+  private decodeEventType(value: xdr.ScVal | undefined): WebhookEventType | null {
+    if (!value) return null;
+
     try {
-      const s = x.sym().toString();
+      const eventType = value.sym().toString();
       const supported: string[] = [
         "LoanRequested",
         "LoanApproved",
@@ -282,7 +578,10 @@ export class EventIndexer {
         "Unpaused",
         "MinScoreUpdated",
       ];
-      return supported.includes(s) ? (s as WebhookEventType) : null;
+
+      return supported.includes(eventType)
+        ? (eventType as WebhookEventType)
+        : null;
     } catch {
       return null;
     }

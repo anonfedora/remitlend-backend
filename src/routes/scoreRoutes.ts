@@ -10,6 +10,7 @@ import { requireApiKey } from "../middleware/auth.js";
 import { strictRateLimiter } from "../middleware/rateLimiter.js";
 import {
   requireJwtAuth,
+  requireScopes,
   requireWalletParamMatchesJwt,
 } from "../middleware/jwtAuth.js";
 
@@ -54,6 +55,7 @@ const router = Router();
 router.get(
   "/:userId",
   requireJwtAuth,
+  requireScopes("read:score"),
   requireWalletParamMatchesJwt("userId"),
   validate(getScoreSchema),
   getScore,

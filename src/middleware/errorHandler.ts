@@ -12,7 +12,7 @@ import logger from "../utils/logger.js";
  */
 export const errorHandler = (
   err: Error,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction,
 ): void => {
@@ -35,8 +35,9 @@ export const errorHandler = (
   if (err instanceof AppError) {
     if (!err.isOperational) {
       logger.error(`Internal AppError: ${err.message}`, {
-        path: _req.path,
-        method: _req.method,
+        requestId: req.requestId,
+        path: req.path,
+        method: req.method,
         stack: err.stack,
       });
     }
@@ -50,6 +51,7 @@ export const errorHandler = (
 
   // ── Unexpected / Programming Errors ──────────────────────────
   logger.error("Unhandled error", {
+    requestId: req.requestId,
     message: err.message,
     name: err.name,
     ...(err.stack && { stack: err.stack }),

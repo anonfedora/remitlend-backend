@@ -25,6 +25,7 @@ import { swaggerSpec } from "./config/swagger.js";
 import { globalRateLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
+import { requestIdMiddleware } from "./middleware/requestId.js";
 import { asyncHandler } from "./middleware/asyncHandler.js";
 import { AppError } from "./errors/AppError.js";
 const app = express();
@@ -69,7 +70,12 @@ const corsOptions: cors.CorsOptions = {
     return callback(new Error("Not allowed by CORS"));
   },
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-api-key"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "x-api-key",
+    "x-request-id",
+  ],
   credentials: true,
 };
 
@@ -77,6 +83,7 @@ app.use(cors(corsOptions));
 app.use(compression());
 app.use(express.json());
 app.use(globalRateLimiter);
+app.use(requestIdMiddleware);
 app.use(requestLogger);
 
 app.get("/", (req: Request, res: Response) => {
