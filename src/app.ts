@@ -10,16 +10,23 @@ import dotenv from "dotenv";
 import { Sentry } from "./config/sentry.js";
 
 dotenv.config();
+import pool from "./db/connection.js";
+import { cacheService } from "./services/cacheService.js";
 import simulationRoutes from "./routes/simulationRoutes.js";
 import scoreRoutes from "./routes/scoreRoutes.js";
 import loanRoutes from "./routes/loanRoutes.js";
+import poolRoutes from "./routes/poolRoutes.js";
 import indexerRoutes from "./routes/indexerRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
+import notificationsRoutes from "./routes/notificationsRoutes.js";
+import eventRoutes from "./routes/eventRoutes.js";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./config/swagger.js";
 import { globalRateLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
+import { requestIdMiddleware } from "./middleware/requestId.js";
 import { asyncHandler } from "./middleware/asyncHandler.js";
 import { AppError } from "./errors/AppError.js";
 const app = express();
@@ -64,7 +71,12 @@ const corsOptions: cors.CorsOptions = {
     return callback(new Error("Not allowed by CORS"));
   },
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "x-api-key",
+    "x-request-id",
+  ],
   credentials: true,
 };
 
@@ -72,25 +84,50 @@ app.use(cors(corsOptions));
 app.use(compression());
 app.use(express.json());
 app.use(globalRateLimiter);
+app.use(requestIdMiddleware);
 app.use(requestLogger);
 
 app.get("/", (req: Request, res: Response) => {
   res.send("RemitLend Backend is running");
 });
 
-app.get("/health", (req: Request, res: Response) => {
-  res.status(200).json({
-    status: "ok",
-    uptime: process.uptime(),
-    timestamp: Date.now(),
-  });
-});
+app.get(
+  "/health",
+  asyncHandler(async (_req: Request, res: Response) => {
+    const [databaseStatus, redisStatus] = await Promise.allSettled([
+      pool
+        .query("SELECT 1")
+        .then(() => "ok" as const)
+        .catch(() => "error" as const),
+      cacheService.ping(),
+    ]);
+
+    const checks = {
+      api: "ok" as const,
+      database:
+        databaseStatus.status === "fulfilled" ? databaseStatus.value : "error",
+      redis: redisStatus.status === "fulfilled" ? redisStatus.value : "error",
+    };
+
+    const allOk = Object.values(checks).every((c) => c === "ok");
+    res.status(allOk ? 200 : 503).json({
+      status: allOk ? "ok" : "degraded",
+      checks,
+      uptime: process.uptime(),
+      timestamp: Date.now(),
+    });
+  }),
+);
 
 app.use("/api", simulationRoutes);
 app.use("/api/score", scoreRoutes);
 app.use("/api/loans", loanRoutes);
+app.use("/api/pool", poolRoutes);
 app.use("/api/indexer", indexerRoutes);
+app.use("/api/admin", adminRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/notifications", notificationsRoutes);
+app.use("/api/events", eventRoutes);
 
 // ── Diagnostic / Test Routes ─────────────────────────────────────
 // Only exposed in test environment to verify centralized error handling.

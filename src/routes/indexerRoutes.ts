@@ -8,6 +8,13 @@ import {
   createWebhookSubscription,
   deleteWebhookSubscription,
 } from "../controllers/indexerController.js";
+import { requireApiKey } from "../middleware/auth.js";
+import {
+  requireJwtAuth,
+  requireScopes,
+  requireWalletOwnership,
+} from "../middleware/jwtAuth.js";
+import { requireLoanBorrowerAccess } from "../middleware/loanAccess.js";
 
 const router = Router();
 
@@ -50,8 +57,12 @@ router.get("/status", getIndexerStatus);
  * /indexer/events/borrower/{borrower}:
  *   get:
  *     summary: Get events for a specific borrower
- *     description: Returns all loan events associated with a borrower address
+ *     description: >
+ *       Returns loan events for the authenticated wallet; `borrower` must match
+ *       the JWT Stellar public key.
  *     tags: [Indexer]
+ *     security:
+ *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: borrower
@@ -72,16 +83,29 @@ router.get("/status", getIndexerStatus);
  *     responses:
  *       200:
  *         description: Events retrieved successfully
+ *       401:
+ *         description: Missing or invalid Bearer token
+ *       403:
+ *         description: borrower does not match authenticated wallet
  */
-router.get("/events/borrower/:borrower", getBorrowerEvents);
+router.get(
+  "/events/borrower/:borrower",
+  requireJwtAuth,
+  requireScopes("read:loans"),
+  requireWalletOwnership,
+  getBorrowerEvents,
+);
 
 /**
  * @swagger
  * /indexer/events/loan/{loanId}:
  *   get:
  *     summary: Get events for a specific loan
- *     description: Returns all events associated with a loan ID
+ *     description: >
+ *       Returns events only if the authenticated wallet is the borrower for that loan.
  *     tags: [Indexer]
+ *     security:
+ *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: loanId
@@ -92,16 +116,30 @@ router.get("/events/borrower/:borrower", getBorrowerEvents);
  *     responses:
  *       200:
  *         description: Events retrieved successfully
+ *       401:
+ *         description: Missing or invalid Bearer token
+ *       404:
+ *         description: Loan not found or not accessible
  */
-router.get("/events/loan/:loanId", getLoanEvents);
+router.get(
+  "/events/loan/:loanId",
+  requireJwtAuth,
+  requireScopes("read:loans"),
+  requireLoanBorrowerAccess,
+  getLoanEvents,
+);
 
 /**
  * @swagger
  * /indexer/events/recent:
  *   get:
  *     summary: Get recent events
- *     description: Returns the most recent loan events, optionally filtered by event type
+ *     description: >
+ *       Internal/admin use: requires `x-api-key` (`INTERNAL_API_KEY`). Returns the
+ *       most recent loan events, optionally filtered by event type.
  *     tags: [Indexer]
+ *     security:
+ *       - ApiKeyAuth: []
  *     parameters:
  *       - in: query
  *         name: limit
@@ -112,12 +150,14 @@ router.get("/events/loan/:loanId", getLoanEvents);
  *         name: eventType
  *         schema:
  *           type: string
- *           enum: [LoanRequested, LoanApproved, LoanRepaid]
+ *           enum: [LoanRequested, LoanApproved, LoanRepaid, LoanDefaulted]
  *     responses:
  *       200:
  *         description: Events retrieved successfully
+ *       401:
+ *         description: Missing or invalid API key
  */
-router.get("/events/recent", getRecentEvents);
+router.get("/events/recent", requireApiKey, getRecentEvents);
 
 /**
  * @swagger
@@ -125,12 +165,18 @@ router.get("/events/recent", getRecentEvents);
  *   get:
  *     summary: List webhook subscriptions
  *     tags: [Indexer]
+ *     security:
+ *       - ApiKeyAuth: []
  *     responses:
  *       200:
  *         description: Webhook subscriptions retrieved successfully
+ *       401:
+ *         description: Missing or invalid API key
  *   post:
  *     summary: Register a webhook subscription
  *     tags: [Indexer]
+ *     security:
+ *       - ApiKeyAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -145,15 +191,17 @@ router.get("/events/recent", getRecentEvents);
  *                 type: array
  *                 items:
  *                   type: string
- *                   enum: [LoanRequested, LoanApproved, LoanRepaid]
+ *                   enum: [LoanRequested, LoanApproved, LoanRepaid, LoanDefaulted]
  *               secret:
  *                 type: string
  *     responses:
  *       201:
  *         description: Webhook subscription created successfully
+ *       401:
+ *         description: Missing or invalid API key
  */
-router.get("/webhooks", listWebhookSubscriptions);
-router.post("/webhooks", createWebhookSubscription);
+router.get("/webhooks", requireApiKey, listWebhookSubscriptions);
+router.post("/webhooks", requireApiKey, createWebhookSubscription);
 
 /**
  * @swagger
@@ -161,6 +209,8 @@ router.post("/webhooks", createWebhookSubscription);
  *   delete:
  *     summary: Delete a webhook subscription
  *     tags: [Indexer]
+ *     security:
+ *       - ApiKeyAuth: []
  *     parameters:
  *       - in: path
  *         name: subscriptionId
@@ -170,7 +220,13 @@ router.post("/webhooks", createWebhookSubscription);
  *     responses:
  *       200:
  *         description: Webhook subscription deleted successfully
+ *       401:
+ *         description: Missing or invalid API key
  */
-router.delete("/webhooks/:subscriptionId", deleteWebhookSubscription);
+router.delete(
+  "/webhooks/:subscriptionId",
+  requireApiKey,
+  deleteWebhookSubscription,
+);
 
 export default router;
