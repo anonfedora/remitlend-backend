@@ -47,10 +47,10 @@ app.use(
     },
     strictTransportSecurity: isProduction
       ? {
-          maxAge: 31536000,
-          includeSubDomains: true,
-          preload: true,
-        }
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true,
+      }
       : false,
   }),
 );
@@ -61,12 +61,11 @@ const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
 
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
-    if (
-      !origin ||
-      allowedOrigins.includes(origin) ||
-      origin.startsWith("http://localhost:")
-    ) {
+    if (!origin) {
       return callback(null, true);
+    }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true)
     }
     return callback(new Error("Not allowed by CORS"));
   },
