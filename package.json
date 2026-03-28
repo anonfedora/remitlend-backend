@@ -15,9 +15,7 @@
     "format:check": "prettier --check .",
     "migrate:create": "node-pg-migrate create",
     "migrate:up": "node-pg-migrate up",
-    "migrate up": "npm run migrate:up",
     "migrate:down": "node-pg-migrate down",
-    "migrate down": "npm run migrate:down",
     "seed": "tsx src/seed/index.ts"
   },
   "keywords": [],
