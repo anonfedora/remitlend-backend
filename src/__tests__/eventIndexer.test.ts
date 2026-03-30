@@ -158,7 +158,7 @@ describe("EventIndexer", () => {
 
     mockUpdateUserScoresBulk.mockImplementation(async (updates: Map<string, number>) => {
       for (const [userId, delta] of updates) {
-        scoreUpdates.push([userId, 500 + delta, delta]);
+        scoreUpdates.push([userId, delta]);
       }
     });
 
