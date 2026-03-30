@@ -90,6 +90,7 @@ async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => P
     while (currentIndex < items.length) {
       const index = currentIndex++;
       results[index] = await fn(items[index]);
+      results[index] = await fn(items[index]!);
     }
   };
   const workers = [];
