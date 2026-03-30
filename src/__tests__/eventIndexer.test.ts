@@ -209,8 +209,7 @@ describe("EventIndexer", () => {
     expect(insertedLoanEvents[3]?.[3]).toBe(borrowerDefaulted);
 
     expect(scoreUpdates).toEqual([
-      [borrowerRepaid, 515, 15],
-      [borrowerDefaulted, 450, -50],
+      [borrowerRepaid, 15, borrowerDefaulted, -50],
     ]);
     expect(mockGetScoreConfig).toHaveBeenCalledTimes(2);
     expect(mockDispatch).toHaveBeenCalledTimes(4);
