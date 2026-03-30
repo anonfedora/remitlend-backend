@@ -482,16 +482,78 @@ class SorobanService {
 
   /**
    * Ping the Stellar RPC server to verify connectivity.
-   * Returns "ok" on success or "error" if unreachable.
+   * Calls getLatestLedger() with a 5-second timeout.
    */
-  async ping(): Promise<"ok" | "error"> {
+  async healthCheck(): Promise<{ connected: boolean; latestLedger?: number; error?: string }> {
     try {
       const server = this.getRpcServer();
-      await server.getHealth();
-      return "ok";
-    } catch {
-      return "error";
+      const timeoutPromise = new Promise<{ connected: boolean; error: string }>((_, reject) =>
+        setTimeout(() => reject(new Error("RPC health check timed out after 5s")), 5000),
+      );
+      
+      const ledgerPromise = server.getLatestLedger().then((res) => ({
+        connected: true,
+        latestLedger: res.sequence,
+      }));
+
+      return await Promise.race([ledgerPromise, timeoutPromise]);
+    } catch (error) {
+      return {
+        connected: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
+  }
+
+  /**
+   * Reads the current available liquidity from the pool token.
+   * This calls the token's balance function for the lending pool contract.
+   */
+  async getPoolBalance(): Promise<number> {
+    const server = this.getRpcServer();
+    const tokenAddress = this.getPoolTokenAddress();
+    const poolId = this.getLendingPoolContractId();
+    const passphrase = this.getNetworkPassphrase();
+    const source = this.getScoreReadSourceKeypair(); // Re-use read-only keypair
+
+    const account = await server.getAccount(source.publicKey());
+    const poolScVal = nativeToScVal(Address.fromString(poolId), {
+      type: "address",
+    });
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: passphrase,
+    })
+      .addOperation(
+        Operation.invokeContractFunction({
+          contract: tokenAddress,
+          function: "balance",
+          args: [poolScVal],
+        }),
+      )
+      .setTimeout(30)
+      .build();
+
+    const simulation = await server.simulateTransaction(tx);
+    if ("error" in simulation) {
+      throw AppError.internal(
+        `Failed to simulate pool balance: ${simulation.error}`,
+      );
+    }
+
+    const retval = simulation.result?.retval;
+    if (!retval) {
+      throw AppError.internal("No balance returned by pool token");
+    }
+
+    const nativeBalance = scValToNative(retval);
+    const balance = Number(nativeBalance);
+    if (!Number.isFinite(balance)) {
+      throw AppError.internal("Invalid on-chain balance returned");
+    }
+
+    return balance;
   }
 
   /**

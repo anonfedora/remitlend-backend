@@ -388,17 +388,18 @@ export const requestLoan = asyncHandler(async (req: Request, res: Response) => {
     borrowerPublicKey: string;
   };
 
-  if (!borrowerPublicKey || !amount || amount <= 0) {
-    throw AppError.badRequest(
-      "borrowerPublicKey and a positive amount are required",
-      ErrorCode.MISSING_FIELD,
-    );
-  }
-
   if (borrowerPublicKey !== req.user?.publicKey) {
     throw AppError.forbidden(
       "borrowerPublicKey must match your authenticated wallet",
       ErrorCode.BORROWER_MISMATCH,
+    );
+  }
+
+  const poolBalance = await sorobanService.getPoolBalance();
+  if (amount > poolBalance) {
+    throw AppError.badRequest(
+      "Insufficient pool liquidity to cover this loan",
+      ErrorCode.INSUFFICIENT_BALANCE,
     );
   }
 
@@ -429,13 +430,6 @@ export const repayLoan = asyncHandler(async (req: Request, res: Response) => {
     borrowerPublicKey: string;
   };
 
-  if (!borrowerPublicKey || !amount || amount <= 0) {
-    throw AppError.badRequest(
-      "borrowerPublicKey and a positive amount are required",
-      ErrorCode.MISSING_FIELD,
-    );
-  }
-
   if (borrowerPublicKey !== req.user?.publicKey) {
     throw AppError.forbidden(
       "borrowerPublicKey must match your authenticated wallet",
@@ -444,9 +438,6 @@ export const repayLoan = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const loanIdNum = Number.parseInt(loanId, 10);
-  if (!Number.isFinite(loanIdNum) || loanIdNum <= 0) {
-    throw AppError.badRequest("Invalid loan ID", ErrorCode.INVALID_LOAN_ID, "loanId");
-  }
 
   const result = await sorobanService.buildRepayTx(
     borrowerPublicKey,
@@ -475,10 +466,6 @@ export const repayLoan = asyncHandler(async (req: Request, res: Response) => {
 export const submitTransaction = asyncHandler(
   async (req: Request, res: Response) => {
     const { signedTxXdr } = req.body as { signedTxXdr: string };
-
-    if (!signedTxXdr) {
-      throw AppError.badRequest("signedTxXdr is required", ErrorCode.MISSING_FIELD, "signedTxXdr");
-    }
 
     // Use transaction wrapper for consistency with multi-step operations
     const result = await withStellarAndDbTransaction(
