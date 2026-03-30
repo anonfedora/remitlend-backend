@@ -5,7 +5,6 @@ import {
   nativeToScVal,
   scValToNative,
   Address,
-  xdr,
   StrKey,
   Keypair,
 } from "@stellar/stellar-sdk";
@@ -24,6 +23,11 @@ import {
 class SorobanService {
   private getRpcServer() {
     return createSorobanRpcServer();
+  }
+
+  async ping(): Promise<"ok" | "error"> {
+    const result = await this.healthCheck();
+    return result.connected ? "ok" : "error";
   }
 
   private getNetworkPassphrase(): string {
@@ -104,10 +108,9 @@ class SorobanService {
 
     const account = await server.getAccount(borrowerPublicKey);
 
-    const borrowerScVal = nativeToScVal(
-      Address.fromString(borrowerPublicKey),
-      { type: "address" },
-    );
+    const borrowerScVal = nativeToScVal(Address.fromString(borrowerPublicKey), {
+      type: "address",
+    });
     const amountScVal = nativeToScVal(BigInt(amount), { type: "i128" });
 
     const tx = new TransactionBuilder(account, {
@@ -199,14 +202,12 @@ class SorobanService {
 
     const account = await server.getAccount(providerPublicKey);
 
-    const providerScVal = nativeToScVal(
-      Address.fromString(providerPublicKey),
-      { type: "address" },
-    );
-    const tokenScVal = nativeToScVal(
-      Address.fromString(tokenAddress),
-      { type: "address" },
-    );
+    const providerScVal = nativeToScVal(Address.fromString(providerPublicKey), {
+      type: "address",
+    });
+    const tokenScVal = nativeToScVal(Address.fromString(tokenAddress), {
+      type: "address",
+    });
     const amountScVal = nativeToScVal(BigInt(amount), { type: "i128" });
 
     const tx = new TransactionBuilder(account, {
@@ -340,7 +341,7 @@ class SorobanService {
     const contractChecks: Array<[string, string]> = [
       ["LOAN_MANAGER_CONTRACT_ID", process.env.LOAN_MANAGER_CONTRACT_ID ?? ""],
       ["LENDING_POOL_CONTRACT_ID", process.env.LENDING_POOL_CONTRACT_ID ?? ""],
-      ["POOL_TOKEN_ADDRESS",       process.env.POOL_TOKEN_ADDRESS       ?? ""],
+      ["POOL_TOKEN_ADDRESS", process.env.POOL_TOKEN_ADDRESS ?? ""],
     ];
 
     for (const [name, value] of contractChecks) {
@@ -422,7 +423,7 @@ class SorobanService {
     return {
       txHash,
       status: polled.status,
-      ...(resultXdr !== undefined ? { resultXdr } : {}),
+      ...(resultXdr ? { resultXdr } : {}),
     };
   }
 
@@ -488,7 +489,7 @@ class SorobanService {
     try {
       const server = this.getRpcServer();
       const timeoutPromise = new Promise<{ connected: boolean; error: string }>((_, reject) =>
-        setTimeout(() => reject(new Error("RPC health check timed out after 5s")), 5000),
+        setTimeout(() => reject(new Error("RPC timeout")), 5000)
       );
       
       const ledgerPromise = server.getLatestLedger().then((res) => ({
@@ -563,17 +564,17 @@ class SorobanService {
    * a hardcoded value in application logic.
    */
   getScoreConfig(): { repaymentDelta: number; defaultPenalty: number } {
-    const repaymentDelta = parseInt(
+    const repaymentDelta = Number.parseInt(
       process.env.SCORE_REPAYMENT_DELTA ?? "15",
       10,
     );
-    const defaultPenalty = parseInt(
+    const defaultPenalty = Number.parseInt(
       process.env.SCORE_DEFAULT_PENALTY ?? "50",
       10,
     );
     return { repaymentDelta, defaultPenalty };
   }
-  
+
 }
 
 export const sorobanService = new SorobanService();

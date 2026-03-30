@@ -504,13 +504,9 @@ export class DefaultChecker {
     const successfulSubmissions = batchResults.filter((b) => !b.error && b.txHash).length;
     const failedSubmissions = batchResults.filter((b) => b.error || !b.txHash).length;
 
-    const loansChecked = targetIds.length;
-    const successfulSubmissions = batches.filter((b) => !b.error && !b.timedOut).length;
-    const failedSubmissions = batches.filter((b) => b.error !== undefined || b.timedOut === true).length;
-
     logger.info("default_check.run.complete", {
       runId,
-      batches: batches.length,
+      batches: batchResults.length,
       loansChecked,
       successfulSubmissions,
       failedSubmissions,
@@ -534,7 +530,7 @@ export class DefaultChecker {
       ...(stats.ledgersPastOldestDue !== undefined
         ? { ledgersPastOldestDue: stats.ledgersPastOldestDue }
         : {}),
-      batches,
+      batches: batchResults,
     };
     } finally {
       // Always release the lock, even if the run failed
