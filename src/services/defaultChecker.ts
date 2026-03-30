@@ -72,7 +72,7 @@ async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => P
   const worker = async () => {
     while (currentIndex < items.length) {
       const index = currentIndex++;
-      results[index] = await fn(items[index]!);
+      results[index] = await fn(items[index]);
     }
   };
   const workers = [];
@@ -91,6 +91,7 @@ export class DefaultChecker {
   private maxLoansPerRun: number;
   private pollAttempts: number;
   private pollSleepMs: number;
+  private concurrency: number;
   private concurrency: number;
 
   constructor() {
@@ -115,6 +116,10 @@ export class DefaultChecker {
     this.pollSleepMs = parsePositiveInt(
       process.env.DEFAULT_CHECK_POLL_SLEEP_MS,
       1_000,
+    );
+    this.concurrency = parsePositiveInt(
+      process.env.DEFAULT_CHECK_CONCURRENCY,
+      3,
     );
     this.concurrency = parsePositiveInt(
       process.env.DEFAULT_CHECK_CONCURRENCY,
@@ -480,6 +485,8 @@ export class DefaultChecker {
 
     const allChunks = chunk(targetIds, this.batchSize).filter(b => b.length > 0);
     const batchResults = await mapConcurrent(allChunks, this.concurrency, async (batch) => {
+    const allChunks = chunk(targetIds, this.batchSize).filter(b => b.length > 0);
+    const batchResults = await mapConcurrent(allChunks, this.concurrency, async (batch) => {
       const result = await this.submitCheckDefaultsWithTimeout(
         server,
         signer,
@@ -499,6 +506,10 @@ export class DefaultChecker {
 
       return result;
     });
+
+    const loansChecked = targetIds.length;
+    const successfulSubmissions = batchResults.filter((b) => !b.error && b.txHash).length;
+    const failedSubmissions = batchResults.filter((b) => b.error || !b.txHash).length;
 
     const loansChecked = targetIds.length;
     const successfulSubmissions = batchResults.filter((b) => !b.error && b.txHash).length;

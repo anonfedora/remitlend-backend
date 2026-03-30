@@ -103,7 +103,7 @@ app.get(
           .then(() => "ok" as const)
           .catch(() => "error" as const),
         cacheService.ping(),
-        sorobanService.ping(),
+        sorobanService.healthCheck(),
       ]);
 
     const dbChecks = {
@@ -111,16 +111,17 @@ app.get(
       redis: redisStatus.status === "fulfilled" ? redisStatus.value : "error",
     };
 
+    const isSorobanFulfilled = sorobanStatus.status === "fulfilled";
+    const sorobanData = isSorobanFulfilled ? sorobanStatus.value : { connected: false, error: "Health check failed" };
+
     const checks = {
       api: "ok" as const,
       ...dbChecks,
-      soroban_rpc: sorobanStatus.status === "fulfilled" ? sorobanStatus.value : "error",
+      stellar: sorobanData,
     };
 
     const coreOk = Object.values(dbChecks).every((c) => c === "ok");
-    const allOk =
-      coreOk &&
-      checks.soroban_rpc === "ok";
+    const allOk = coreOk && sorobanData.connected;
 
     res.status(coreOk ? 200 : 503).json({
       status: allOk ? "ok" : (coreOk ? "degraded" : "down"),

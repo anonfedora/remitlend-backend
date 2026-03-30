@@ -484,12 +484,14 @@ class SorobanService {
   /**
    * Ping the Stellar RPC server to verify connectivity.
    * Calls getLatestLedger() with a 5-second timeout.
+   * Calls getLatestLedger() with a 5-second timeout.
    */
+  async healthCheck(): Promise<{ connected: boolean; latestLedger?: number; error?: string }> {
   async healthCheck(): Promise<{ connected: boolean; latestLedger?: number; error?: string }> {
     try {
       const server = this.getRpcServer();
       const timeoutPromise = new Promise<{ connected: boolean; error: string }>((_, reject) =>
-        setTimeout(() => reject(new Error("RPC timeout")), 5000)
+        setTimeout(() => reject(new Error("RPC health check timed out after 5s")), 5000),
       );
       
       const ledgerPromise = server.getLatestLedger().then((res) => ({
@@ -553,6 +555,8 @@ class SorobanService {
     if (!Number.isFinite(balance)) {
       throw AppError.internal("Invalid on-chain balance returned");
     }
+
+    return balance;
 
     return balance;
   }
