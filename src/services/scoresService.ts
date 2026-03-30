@@ -3,32 +3,41 @@ import logger from "../utils/logger.js";
 
 /**
  * Apply multiple user score deltas. The `updates` map contains userId => delta
- * (can be positive or negative). For each user, we insert a row with an initial
- * score of 500 + delta and on conflict update by adding the delta.
+ * (can be positive or negative). All user updates are inserted in a single
+ * query for efficiency.
  */
 export async function updateUserScoresBulk(
   updates: Map<string, number>,
 ): Promise<void> {
   if (!updates || updates.size === 0) return;
 
-  try {
-    for (const [userId, delta] of updates) {
-      // skip empty user ids
-      if (!userId) continue;
+  const params: (string | number)[] = [];
+  
+  for (const [userId, delta] of updates) {
+    // skip empty user ids
+    if (!userId) continue;
+    params.push(userId, delta);
+  }
 
-      const currentScore = 500 + delta;
-      await query(
-        `INSERT INTO scores (user_id, current_score)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id)
-         DO UPDATE SET
-           current_score = LEAST(850, GREATEST(300, scores.current_score + $3)),
-           updated_at = CURRENT_TIMESTAMP`,
-        [userId, currentScore, delta],
-      );
-    }
+  if (params.length === 0) return;
+
+  try {
+    const valuePlaceholders = Array.from(
+      { length: params.length / 2 },
+      (_, i) => `($${i * 2 + 1}, 500 + $${i * 2 + 2})`
+    ).join(", ");
+
+    await query(
+      `INSERT INTO scores (user_id, current_score)
+       VALUES ${valuePlaceholders}
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         current_score = LEAST(850, GREATEST(300, scores.current_score + EXCLUDED.current_score - 500)),
+         updated_at = CURRENT_TIMESTAMP`,
+      params,
+    );
     logger.info("Applied bulk user score updates", {
-      updatedCount: updates.size,
+      updatedCount: params.length / 2,
     });
   } catch (error) {
     logger.error("Failed to apply bulk user score updates", { error });
