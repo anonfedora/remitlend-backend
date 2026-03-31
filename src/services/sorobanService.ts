@@ -490,7 +490,7 @@ class SorobanService {
         latestLedger: res.sequence,
       }));
 
-      return await Promise.race([ledgerPromise, timeoutPromise]);
+      return await Promise.race([ledgerPromise, (timeoutPromise as Promise<any>)]);
     } catch (error) {
       return {
         connected: false,

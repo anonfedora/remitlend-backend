@@ -118,9 +118,7 @@ app.get(
     };
 
     const coreOk = Object.values(dbChecks).every((c) => c === "ok");
-    const allOk =
-      coreOk &&
-      checks.soroban_rpc === "ok";
+    const allOk = coreOk && checks.soroban_rpc === "ok";
 
     res.status(coreOk ? 200 : 503).json({
       status: allOk ? "ok" : (coreOk ? "degraded" : "down"),
