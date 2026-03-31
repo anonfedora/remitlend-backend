@@ -1,10 +1,12 @@
 import request from "supertest";
 import { jest } from "@jest/globals";
+import { Keypair } from "@stellar/stellar-sdk";
 import { generateJwtToken } from "../services/authService.js";
 
 type MockQueryResult = { rows: unknown[]; rowCount?: number };
 
 const VALID_API_KEY = "test-internal-key";
+const TEST_BORROWER = Keypair.random().publicKey();
 
 process.env.JWT_SECRET = "test-jwt-secret-min-32-chars-long!!";
 process.env.INTERNAL_API_KEY = VALID_API_KEY;
@@ -162,15 +164,16 @@ describe("POST /api/loans/request", () => {
   it("should reject unauthenticated requests", async () => {
     const response = await request(app)
       .post("/api/loans/request")
-      .send({ amount: 1000, borrowerPublicKey: "GABC123" });
+      .send({ amount: 1000, borrowerPublicKey: TEST_BORROWER });
     expect(response.status).toBe(401);
   });
 
   it("should reject when borrowerPublicKey does not match JWT", async () => {
+    const otherBorrower = Keypair.random().publicKey();
     const response = await request(app)
       .post("/api/loans/request")
-      .set(bearer("wallet-A"))
-      .send({ amount: 1000, borrowerPublicKey: "wallet-B" });
+      .set(bearer(TEST_BORROWER))
+      .send({ amount: 1000, borrowerPublicKey: otherBorrower });
     expect(response.status).toBe(403);
   });
 
@@ -182,8 +185,8 @@ describe("POST /api/loans/request", () => {
 
     const response = await request(app)
       .post("/api/loans/request")
-      .set(bearer("GABC123"))
-      .send({ amount: 1000, borrowerPublicKey: "GABC123" });
+      .set(bearer(TEST_BORROWER))
+      .send({ amount: 1000, borrowerPublicKey: TEST_BORROWER });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -194,8 +197,8 @@ describe("POST /api/loans/request", () => {
   it("should reject missing amount", async () => {
     const response = await request(app)
       .post("/api/loans/request")
-      .set(bearer("GABC123"))
-      .send({ borrowerPublicKey: "GABC123" });
+      .set(bearer(TEST_BORROWER))
+      .send({ borrowerPublicKey: TEST_BORROWER });
     expect(response.status).toBe(400);
   });
 });
@@ -219,7 +222,7 @@ describe("POST /api/loans/submit", () => {
 
     const response = await request(app)
       .post("/api/loans/submit")
-      .set(bearer("GABC123"))
+      .set(bearer(TEST_BORROWER))
       .send({ signedTxXdr: "signed-xdr-data" });
 
     expect(response.status).toBe(200);
@@ -231,7 +234,7 @@ describe("POST /api/loans/submit", () => {
   it("should reject missing signedTxXdr", async () => {
     const response = await request(app)
       .post("/api/loans/submit")
-      .set(bearer("GABC123"))
+      .set(bearer(TEST_BORROWER))
       .send({});
     expect(response.status).toBe(400);
   });
@@ -240,7 +243,7 @@ describe("POST /api/loans/submit", () => {
 describe("GET /api/loans/:loanId", () => {
   it("should return loan details for the authenticated borrower", async () => {
     mockedQuery
-      .mockResolvedValueOnce({ rows: [{ borrower: "GABC123" }] })
+      .mockResolvedValueOnce({ rows: [{ borrower: TEST_BORROWER }] })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -269,7 +272,7 @@ describe("GET /api/loans/:loanId", () => {
 
     const response = await request(app)
       .get("/api/loans/123")
-      .set(bearer("GABC123"));
+      .set(bearer(TEST_BORROWER));
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -284,7 +287,7 @@ describe("GET /api/loans/:loanId", () => {
 
     const response = await request(app)
       .get("/api/loans/123")
-      .set(bearer("GABC123"));
+      .set(bearer(TEST_BORROWER));
 
     expect(response.status).toBe(403);
   });
@@ -296,7 +299,7 @@ describe("GET /api/loans/:loanId", () => {
 
     const response = await request(app)
       .get("/api/loans/123")
-      .set(bearer("GABC123"));
+      .set(bearer(TEST_BORROWER));
 
     expect(response.status).toBe(404);
   });
@@ -305,7 +308,7 @@ describe("GET /api/loans/:loanId", () => {
 describe("GET /api/loans/:loanId/amortization-schedule", () => {
   it("should return amortization schedule for an approved loan", async () => {
     mockedQuery
-      .mockResolvedValueOnce({ rows: [{ borrower: "GABC123" }] })
+      .mockResolvedValueOnce({ rows: [{ borrower: TEST_BORROWER }] })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -325,7 +328,7 @@ describe("GET /api/loans/:loanId/amortization-schedule", () => {
 
     const response = await request(app)
       .get("/api/loans/123/amortization-schedule")
-      .set(bearer("GABC123"));
+      .set(bearer(TEST_BORROWER));
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -340,7 +343,7 @@ describe("GET /api/loans/:loanId/amortization-schedule", () => {
 
   it("should return 404 when loan is not fully approved", async () => {
     mockedQuery
-      .mockResolvedValueOnce({ rows: [{ borrower: "GABC123" }] })
+      .mockResolvedValueOnce({ rows: [{ borrower: TEST_BORROWER }] })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -353,7 +356,7 @@ describe("GET /api/loans/:loanId/amortization-schedule", () => {
 
     const response = await request(app)
       .get("/api/loans/123/amortization-schedule")
-      .set(bearer("GABC123"));
+      .set(bearer(TEST_BORROWER));
 
     expect(response.status).toBe(404);
   });
@@ -366,14 +369,14 @@ describe("POST /api/loans/:loanId/repay", () => {
   it("should reject unauthenticated requests", async () => {
     const response = await request(app)
       .post("/api/loans/1/repay")
-      .send({ amount: 500, borrowerPublicKey: "GABC123" });
+      .send({ amount: 500, borrowerPublicKey: TEST_BORROWER });
     expect(response.status).toBe(401);
   });
 
   it("should return unsigned XDR for valid repayment", async () => {
     // requireLoanBorrowerAccess check
     mockedQuery.mockResolvedValueOnce({
-      rows: [{ borrower: "GABC123" }],
+      rows: [{ borrower: TEST_BORROWER }],
     });
 
     mockBuildRepayTx.mockResolvedValueOnce({
@@ -383,8 +386,8 @@ describe("POST /api/loans/:loanId/repay", () => {
 
     const response = await request(app)
       .post("/api/loans/1/repay")
-      .set(bearer("GABC123"))
-      .send({ amount: 500, borrowerPublicKey: "GABC123" });
+      .set(bearer(TEST_BORROWER))
+      .send({ amount: 500, borrowerPublicKey: TEST_BORROWER });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -399,21 +402,21 @@ describe("POST /api/loans/:loanId/repay", () => {
 
     const response = await request(app)
       .post("/api/loans/1/repay")
-      .set(bearer("GABC123"))
-      .send({ amount: 500, borrowerPublicKey: "GABC123" });
+      .set(bearer(TEST_BORROWER))
+      .send({ amount: 500, borrowerPublicKey: TEST_BORROWER });
 
     expect(response.status).toBe(403);
   });
 
   it("should reject missing amount", async () => {
     mockedQuery.mockResolvedValueOnce({
-      rows: [{ borrower: "GABC123" }],
+      rows: [{ borrower: TEST_BORROWER }],
     });
 
     const response = await request(app)
       .post("/api/loans/1/repay")
-      .set(bearer("GABC123"))
-      .send({ borrowerPublicKey: "GABC123" });
+      .set(bearer(TEST_BORROWER))
+      .send({ borrowerPublicKey: TEST_BORROWER });
 
     expect(response.status).toBe(400);
   });
@@ -426,7 +429,7 @@ describe("POST /api/loans/:loanId/submit", () => {
   it("should submit a signed repayment transaction", async () => {
     // requireLoanBorrowerAccess
     mockedQuery.mockResolvedValueOnce({
-      rows: [{ borrower: "GABC123" }],
+      rows: [{ borrower: TEST_BORROWER }],
     });
 
     mockSubmitSignedTx.mockResolvedValueOnce({
@@ -436,7 +439,7 @@ describe("POST /api/loans/:loanId/submit", () => {
 
     const response = await request(app)
       .post("/api/loans/1/submit")
-      .set(bearer("GABC123"))
+      .set(bearer(TEST_BORROWER))
       .send({ signedTxXdr: "signed-repay-xdr" });
 
     expect(response.status).toBe(200);
