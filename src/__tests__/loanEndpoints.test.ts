@@ -240,7 +240,7 @@ describe("POST /api/loans/submit", () => {
 describe("GET /api/loans/:loanId", () => {
   it("should return loan details for the authenticated borrower", async () => {
     mockedQuery
-      .mockResolvedValueOnce({ rows: [{ borrower: "GABC123" }] })
+      .mockResolvedValueOnce({ rows: [{ borrower: "GABC123" }] }) // borrower check
       .mockResolvedValueOnce({
         rows: [
           {
@@ -262,10 +262,9 @@ describe("GET /api/loans/:loanId", () => {
             term_ledgers: 17280,
           },
         ],
-      })
-      .mockResolvedValueOnce({
-        rows: [{ last_indexed_ledger: 25 }],
-      });
+      }) // loan events
+      .mockResolvedValueOnce({ rows: [{ last_indexed_ledger: 25 }] }) // getLatestLedger
+      .mockResolvedValueOnce({ rows: [] }); // loan_disputes (no open disputes)
 
     const response = await request(app)
       .get("/api/loans/123")

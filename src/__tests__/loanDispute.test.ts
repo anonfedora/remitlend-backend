@@ -1,32 +1,31 @@
 // ─── Env vars MUST be set before any app imports ─────────────────────────────
+
 process.env.JWT_SECRET = 'test-secret';
 process.env.INTERNAL_API_KEY = 'test-api-key';
 process.env.NODE_ENV = 'test';
 
-// ─── Mock the DB before app loads ────────────────────────────────────────────
 import { jest } from '@jest/globals';
 
-jest.mock('../db/connection.js', () => ({
-  query: jest.fn(),
-  default: {
-    query: jest.fn(),
-    connect: jest.fn(),
-    end: jest.fn(),
-  },
+// ESM-compatible mocking
+const mockQuery: any = jest.fn();
+jest.unstable_mockModule('../db/connection.js', () => ({
+  query: mockQuery,
+  default: { query: mockQuery, connect: jest.fn(), end: jest.fn() },
 }));
-
-jest.mock('../db/transaction.js', () => ({
+jest.unstable_mockModule('../db/transaction.js', () => ({
   withTransaction: jest.fn(),
   withStellarAndDbTransaction: jest.fn(),
 }));
 
-// ─── Imports (after mocks) ────────────────────────────────────────────────────
-import request from 'supertest';
-import jwt from 'jsonwebtoken';
-import app from '../app.js';
-import { query } from '../db/connection.js';
-
-const mockQuery = query as jest.MockedFunction<typeof query>;
+let request: typeof import('supertest');
+let jwt: typeof import('jsonwebtoken');
+let app: any;
+// Dynamic imports after mocks
+beforeAll(async () => {
+  ({ default: request } = await import('supertest'));
+  ({ default: jwt } = await import('jsonwebtoken'));
+  ({ default: app } = await import('../app.js'));
+});
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Real Stellar-format public key so any key-format validation passes
@@ -55,30 +54,33 @@ function dbOk(command = 'INSERT') {
 }
 
 // ─── Test state ───────────────────────────────────────────────────────────────
+
 let authToken: string;
 let defaultedLoanId = LOAN_ID;
-let disputeId       = DISPUTE_ID;
+let disputeId = DISPUTE_ID;
 
-// ─── Setup ────────────────────────────────────────────────────────────────────
+// Setup test loan and defaulted state before tests
 beforeAll(async () => {
+  // Wait for dynamic imports
+  if (!request || !jwt || !app) {
+    ({ default: request } = await import('supertest'));
+    ({ default: jwt } = await import('jsonwebtoken'));
+    ({ default: app } = await import('../app.js'));
+  }
   authToken = mintToken();
 
-  /**
-   * POST /api/loans  →  createTestLoan
-   *   [1] INSERT loan_events LoanRequested  RETURNING loan_id
-   *   [2] INSERT loan_events LoanApproved
-   *
-   * POST /api/loans/:id/mark-defaulted  →  requireLoanBorrowerAccess + markLoanDefaulted
-   *   [3] requireLoanBorrowerAccess: SELECT borrower FROM loan_events WHERE loan_id = 42
-   *   [4] markLoanDefaulted: SELECT loan_id FROM loan_events (existence check)
-   *   [5] markLoanDefaulted: INSERT loan_events LoanDefaulted
-   */
+  mockQuery.mockReset();
+  // [1] INSERT loan_events LoanRequested  RETURNING loan_id
+  // [2] INSERT loan_events LoanApproved
+  // [3] requireLoanBorrowerAccess: SELECT borrower FROM loan_events WHERE loan_id = 42
+  // [4] markLoanDefaulted: SELECT loan_id FROM loan_events (existence check)
+  // [5] markLoanDefaulted: INSERT loan_events LoanDefaulted
   mockQuery
-    .mockResolvedValueOnce(dbRows([{ loan_id: LOAN_ID }]))          // [1]
-    .mockResolvedValueOnce(dbOk())                                   // [2]
-    .mockResolvedValueOnce(dbRows([{ borrower: TEST_PUBLIC_KEY }])) // [3] loanAccess
-    .mockResolvedValueOnce(dbRows([{ loan_id: LOAN_ID }]))          // [4] existence check
-    .mockResolvedValueOnce(dbOk());                                  // [5] LoanDefaulted
+    .mockResolvedValueOnce(dbRows([{ loan_id: LOAN_ID }]))
+    .mockResolvedValueOnce(dbOk())
+    .mockResolvedValueOnce(dbRows([{ borrower: TEST_PUBLIC_KEY }]))
+    .mockResolvedValueOnce(dbRows([{ loan_id: LOAN_ID }]))
+    .mockResolvedValueOnce(dbOk());
 
   const loanRes = await request(app)
     .post('/api/loans')
