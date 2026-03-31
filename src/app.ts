@@ -34,6 +34,17 @@ import { AppError } from "./errors/AppError.js";
 const app = express();
 
 const isProduction = process.env.NODE_ENV === "production";
+const configuredFrontendUrl = process.env.FRONTEND_URL?.trim();
+// `CORS_ALLOWED_ORIGINS` is retained as a migration fallback while `FRONTEND_URL`
+// becomes the primary documented config for the frontend origin.
+const additionalAllowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
+  : [];
+const allowedOrigins = new Set(
+  [configuredFrontendUrl, ...additionalAllowedOrigins].filter(
+    (origin): origin is string => Boolean(origin),
+  ),
+);
 
 app.use(
   helmet({
@@ -57,19 +68,25 @@ app.use(
   }),
 );
 
-const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
-  ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
-  : [];
-
 const corsOptions: cors.CorsOptions = {
   origin: (origin, callback) => {
     if (!origin) {
       return callback(null, true);
     }
-    if (allowedOrigins.includes(origin)) {
+
+    if (allowedOrigins.has(origin)) {
       return callback(null, true);
     }
-    return callback(new Error("Not allowed by CORS"));
+
+    if (!isProduction) {
+      return callback(null, true);
+    }
+
+    return callback(
+      AppError.forbidden(
+        "Origin is not allowed by CORS policy",
+      ),
+    );
   },
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: [

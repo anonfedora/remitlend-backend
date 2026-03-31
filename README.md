@@ -87,7 +87,9 @@ Create a `.env` file in the backend directory:
 PORT=3001
 
 # CORS Configuration
-CORS_ALLOWED_ORIGINS=http://localhost:3000
+FRONTEND_URL=http://localhost:3000
+# Optional backward-compatible fallback for multiple allowed origins during migration
+# CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
 
 # Stellar Configuration
 STELLAR_NETWORK=testnet
