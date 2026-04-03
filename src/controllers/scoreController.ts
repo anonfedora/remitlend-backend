@@ -238,15 +238,6 @@ export const getScoreBreakdown = asyncHandler(
            AVG(repayment_ledgers) AS avg_repayment_ledgers
          FROM repayment_timing
        ),
-       -- Score history events for calculating streaks
-       score_history_events AS (
-         SELECT 
-           event_type,
-           ledger_closed_at,
-           ROW_NUMBER() OVER (ORDER BY ledger_closed_at ASC) AS event_seq
-         FROM borrower_events
-         WHERE event_type IN ('LoanRepaid', 'LoanDefaulted')
-       ),
        -- Final aggregated breakdown
        breakdown_summary AS (
          SELECT 
