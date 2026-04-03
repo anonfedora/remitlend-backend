@@ -49,7 +49,6 @@ describe("GET /api/score/:userId/breakdown", () => {
   it("should return a breakdown for a valid userId", async () => {
     // Mock the optimized single CTE query (returns all breakdown metrics)
     mockedQuery
-
       .mockResolvedValueOnce({
         rows: [
           {
@@ -71,7 +70,6 @@ describe("GET /api/score/:userId/breakdown", () => {
           { event_type: "LoanRepaid", ledger_closed_at: "2026-03-10T10:00:00Z" },
         ],
       } as any); // History query
-
 
     const response = await request(app)
       .get("/api/score/user123/breakdown")
