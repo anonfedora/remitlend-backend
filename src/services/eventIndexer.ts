@@ -272,8 +272,9 @@ export class EventIndexer {
 
     return runWithRequestContext(correlationId, async () => {
       if (endLedger < startLedger) {
+        logger.warn("Skipping invalid ledger range", { startLedger, endLedger });
         return {
-          lastProcessedLedger: endLedger,
+          lastProcessedLedger: Math.max(startLedger - 1, 0),
           fetchedEvents: 0,
           insertedEvents: 0,
         };
