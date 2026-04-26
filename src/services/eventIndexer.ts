@@ -17,6 +17,8 @@ import {
 } from "./notificationService.js";
 import { sorobanService } from "./sorobanService.js";
 import { updateUserScoresBulk } from "./scoresService.js";
+import { AppError } from "../errors/AppError.js";
+
 
 export interface SorobanRawEvent {
   id: string;
@@ -272,11 +274,9 @@ export class EventIndexer {
 
     return runWithRequestContext(correlationId, async () => {
       if (endLedger < startLedger) {
-        return {
-          lastProcessedLedger: endLedger,
-          fetchedEvents: 0,
-          insertedEvents: 0,
-        };
+        throw AppError.badRequest(
+          `Invalid ledger range: endLedger (${endLedger}) cannot be less than startLedger (${startLedger})`,
+        );
       }
 
       try {

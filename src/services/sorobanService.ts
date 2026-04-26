@@ -652,16 +652,53 @@ class SorobanService {
    * with the deployed RemittanceNFT contract constants without requiring
    * a hardcoded value in application logic.
    */
-  getScoreConfig(): { repaymentDelta: number; defaultPenalty: number } {
+  getScoreConfig(): { 
+    repaymentDelta: number; 
+    defaultPenalty: number;
+    latePenalty: number;
+  } {
     const repaymentDelta = Number.parseInt(
-      process.env.SCORE_REPAYMENT_DELTA ?? "15",
+      process.env.SCORE_DELTA_REPAY ?? "15",
       10,
     );
     const defaultPenalty = Number.parseInt(
-      process.env.SCORE_DEFAULT_PENALTY ?? "50",
+      process.env.SCORE_DELTA_DEFAULT ?? "50",
       10,
     );
-    return { repaymentDelta, defaultPenalty };
+    const latePenalty = Number.parseInt(
+      process.env.SCORE_DELTA_LATE ?? "5",
+      10,
+    );
+    return { repaymentDelta, defaultPenalty, latePenalty };
+  }
+
+  /**
+   * Validates that all score delta environment variables are valid integers.
+   * Repayment delta must be positive, penalties must be positive (will be subtracted).
+   * Throws AppError.internal() if any are invalid.
+   */
+  validateScoreConfig(): void {
+    const configs = [
+      { name: "SCORE_DELTA_REPAY", value: process.env.SCORE_DELTA_REPAY ?? "15", mustBePositive: true },
+      { name: "SCORE_DELTA_DEFAULT", value: process.env.SCORE_DELTA_DEFAULT ?? "50", mustBePositive: true },
+      { name: "SCORE_DELTA_LATE", value: process.env.SCORE_DELTA_LATE ?? "5", mustBePositive: true },
+    ];
+
+    for (const { name, value, mustBePositive } of configs) {
+      const num = Number.parseInt(value, 10);
+      if (!Number.isInteger(num)) {
+        throw AppError.internal(`${name} must be a valid integer: "${value}"`);
+      }
+      if (mustBePositive && num <= 0) {
+        throw AppError.internal(`${name} must be a positive integer: ${num}`);
+      }
+    }
+
+    logger.info("Score delta configuration validated", {
+      repaymentDelta: process.env.SCORE_DELTA_REPAY ?? "15",
+      defaultPenalty: process.env.SCORE_DELTA_DEFAULT ?? "50",
+      latePenalty: process.env.SCORE_DELTA_LATE ?? "5",
+    });
   }
 }
 
