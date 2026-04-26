@@ -17,6 +17,8 @@ import {
 } from "./notificationService.js";
 import { sorobanService } from "./sorobanService.js";
 import { updateUserScoresBulk } from "./scoresService.js";
+import { AppError } from "../errors/AppError.js";
+
 
 export interface SorobanRawEvent {
   id: string;
@@ -286,11 +288,9 @@ export class EventIndexer {
 
     return runWithRequestContext(correlationId, async () => {
       if (endLedger < startLedger) {
-        return {
-          lastProcessedLedger: endLedger,
-          fetchedEvents: 0,
-          insertedEvents: 0,
-        };
+        throw AppError.badRequest(
+          `Invalid ledger range: endLedger (${endLedger}) cannot be less than startLedger (${startLedger})`,
+        );
       }
 
       try {
@@ -486,17 +486,11 @@ export class EventIndexer {
         }
       }
 
-      await query("COMMIT", []);
-      // apply batched score updates after the transaction commits
+      // apply batched score updates BEFORE the transaction commits to ensure atomicity
       if (scoreUpdates.size > 0) {
-        try {
-          await updateUserScoresBulk(scoreUpdates);
-        } catch (err) {
-          logger.error("Failed to apply bulk user score updates", {
-            error: err,
-          });
-        }
+        await updateUserScoresBulk(scoreUpdates);
       }
+      await query("COMMIT", []);
     } catch (error) {
       await query("ROLLBACK", []);
       throw error;
@@ -549,12 +543,25 @@ export class EventIndexer {
       borrower = this.decodeAddress(event.topic[1]);
       amount = this.decodeAmount(event.value);
     } else if (type === "LoanApproved") {
-      if (!event.topic[1]) return null;
+      if (!event.topic[1] || !event.topic[2]) return null;
       loanId = this.decodeLoanId(event.topic[1]);
       if (loanId === undefined) return null;
-      borrower = this.decodeAddress(event.value);
-      interestRateBps = 1200;
-      termLedgers = 17280;
+      borrower = this.decodeAddress(event.topic[2]);
+
+      const data = scValToNative(event.value);
+      if (!Array.isArray(data) || data.length < 2) {
+        throw new Error(`LoanApproved event missing interest_rate_bps or term_ledgers: ${event.id}`);
+      }
+
+      interestRateBps = Number(data[0]);
+      termLedgers = Number(data[1]);
+
+      if (!Number.isFinite(interestRateBps)) {
+        throw new Error(`LoanApproved event has invalid interest_rate_bps: ${event.id}`);
+      }
+      if (!Number.isFinite(termLedgers)) {
+        throw new Error(`LoanApproved event has invalid term_ledgers: ${event.id}`);
+      }
     } else if (type === "LoanRepaid") {
       if (!event.topic[1] || !event.topic[2]) return null;
       borrower = this.decodeAddress(event.topic[1]);
