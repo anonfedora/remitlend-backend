@@ -6,12 +6,37 @@ import { notificationService } from "../services/notificationService.js";
 /**
  * List all open loan disputes for admin review
  */
-export const listLoanDisputes = asyncHandler(async (_req, res) => {
-  const result = await query(
-    `SELECT * FROM loan_disputes WHERE status = 'open' ORDER BY created_at ASC`,
-    [],
-  );
+export const listLoanDisputes = asyncHandler(async (req, res) => {
+  const status = (req.query.status as string | undefined) ?? "open";
+  if (!["open", "resolved", "rejected", "all"].includes(status)) {
+    throw AppError.badRequest("Invalid status filter");
+  }
+
+  const result =
+    status === "all"
+      ? await query(`SELECT * FROM loan_disputes ORDER BY created_at ASC`, [])
+      : await query(
+          `SELECT * FROM loan_disputes WHERE status = $1 ORDER BY created_at ASC`,
+          [status],
+        );
   res.json({ success: true, disputes: result.rows });
+});
+
+/**
+ * Get a single dispute with its associated loan
+ */
+export const getLoanDispute = asyncHandler(async (req, res) => {
+  const { disputeId } = req.params;
+  const disputeResult = await query(
+    `SELECT d.*, l.* AS loan FROM loan_disputes d JOIN loans l ON l.id = d.loan_id WHERE d.id = $1`,
+    [disputeId],
+  );
+
+  if (disputeResult.rows.length === 0) {
+    throw AppError.notFound("Dispute not found");
+  }
+
+  res.json({ success: true, dispute: disputeResult.rows[0] });
 });
 
 /**
@@ -65,32 +90,61 @@ export const resolveLoanDispute = asyncHandler(async (req, res) => {
     );
   }
 
-  // Notify borrower about dispute resolution
+  // Notify borrower via notifications + SSE (and external email if enabled)
   try {
-    const notificationTitle =
-      action === "confirm"
-        ? "Dispute Resolved: Default Confirmed"
-        : "Dispute Resolved: Default Reversed";
-
-    const notificationMessage =
-      action === "confirm"
-        ? `Your loan dispute (Loan #${dispute.loan_id}) has been reviewed and the default status has been confirmed. Admin note: ${adminNote || resolution}`
-        : `Your loan dispute (Loan #${dispute.loan_id}) has been reviewed and the default status has been reversed. Your loan is now active. Admin note: ${adminNote || resolution}`;
-
+    const msg = `Your dispute for loan ${dispute.loan_id} has been resolved: ${resolution}`;
+    const type =
+      action === "reverse" ? "repayment_confirmed" : "loan_defaulted";
     await notificationService.createNotification({
       userId: dispute.borrower,
-      type: action === "confirm" ? "loan_defaulted" : "repayment_confirmed",
-      title: notificationTitle,
-      message: notificationMessage,
+      type: type as any,
+      title: "Dispute resolved",
+      message: msg,
       loanId: dispute.loan_id,
     });
-  } catch (error) {
-    // Log error but don't fail the entire resolution
-    console.error("Failed to send dispute resolution notification:", error);
+  } catch (_err) {
+    // Log and continue — resolution shouldn't fail because of notifications
+    // notificationService already logs errors internally
   }
 
-  res.json({
-    success: true,
-    message: "Dispute resolved and borrower notified.",
-  });
+  res.json({ success: true, message: "Dispute resolved." });
+});
+
+/**
+ * Admin rejects a dispute (keeps default status)
+ * POST /admin/loan-disputes/:disputeId/reject
+ */
+export const rejectLoanDispute = asyncHandler(async (req, res) => {
+  const { disputeId } = req.params;
+  const { admin_note } = req.body as { admin_note?: string };
+
+  const disputeResult = await query(
+    `SELECT * FROM loan_disputes WHERE id = $1 AND status = 'open'`,
+    [disputeId],
+  );
+  if (disputeResult.rows.length === 0) {
+    throw AppError.notFound("Dispute not found or already processed");
+  }
+
+  const dispute = disputeResult.rows[0];
+
+  await query(
+    `UPDATE loan_disputes SET status = 'rejected', resolution = $1, resolved_at = NOW() WHERE id = $2`,
+    [admin_note ?? "rejected by admin", disputeId],
+  );
+
+  try {
+    const msg = `Your dispute for loan ${dispute.loan_id} was rejected by admin.`;
+    await notificationService.createNotification({
+      userId: dispute.borrower,
+      type: "loan_defaulted" as any,
+      title: "Dispute rejected",
+      message: admin_note ? `${msg} Note: ${admin_note}` : msg,
+      loanId: dispute.loan_id,
+    });
+  } catch (_err) {
+    // swallow
+  }
+
+  res.json({ success: true, message: "Dispute rejected." });
 });
