@@ -57,6 +57,20 @@ jest.unstable_mockModule("../services/eventStreamService.js", () => ({
   eventStreamService: { broadcast: jest.fn() },
 }));
 
+jest.unstable_mockModule("../services/cacheService.js", () => ({
+  cacheService: {
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue(undefined),
+    delete: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
+jest.unstable_mockModule("../services/notificationService.js", () => ({
+  notificationService: {
+    createNotification: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // ── SorobanService.getScoreConfig — tests the env-var reading logic ───────
 describe("SorobanService.getScoreConfig()", () => {
   afterEach(() => {
