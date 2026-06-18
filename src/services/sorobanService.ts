@@ -654,10 +654,13 @@ class SorobanService {
     latestLedger?: number;
     error?: string;
   }> {
+    let timeoutId: NodeJS.Timeout | undefined;
     try {
       const server = this.getRpcServer();
       const timeoutPromise = new Promise<{ connected: boolean; error: string }>(
-        (_, reject) => setTimeout(() => reject(new Error("RPC timeout")), 5000),
+        (_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("RPC timeout")), 5000);
+        },
       );
 
       const ledgerPromise = server.getLatestLedger().then((res) => ({
@@ -667,13 +670,17 @@ class SorobanService {
 
       return await Promise.race([
         ledgerPromise,
-        timeoutPromise as Promise<any>,
+        timeoutPromise,
       ]);
     } catch (error) {
       return {
         connected: false,
         error: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     }
   }
 

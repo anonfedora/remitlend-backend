@@ -112,6 +112,10 @@ export function getStellarNetworkPassphrase(): string {
   return getStellarConfig().networkPassphrase;
 }
 
+/**
+ * Creates and returns a new Soroban RPC server instance.
+ * Automatically enables HTTP (in addition to HTTPS) if the RPC URL starts with http://.
+ */
 export function createSorobanRpcServer(): rpc.Server {
   const rpcUrl = getStellarRpcUrl();
   const allowHttp = rpcUrl.startsWith("http://");
