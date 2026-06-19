@@ -444,6 +444,65 @@ describe("EventIndexer — advisory lock prevents concurrent poll cycles", () =>
     expect(mockLockClient.release).toHaveBeenCalledTimes(1);
   });
 
+  it("restarted instance resumes from the persisted cursor, not from ledger 0", async () => {
+    // Simulate a stopped-then-restarted indexer. The DB holds last_indexed_ledger=500.
+    // The restarted instance must begin fetching from 501, not from 0.
+    const mockLockClient = {
+      query: jest.fn<any>().mockImplementation((sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          return Promise.resolve({ rows: [{ acquired: true }] });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+      release: jest.fn<any>(),
+    };
+    mockGetClient.mockResolvedValue(mockLockClient);
+
+    const mockQuery = (await import("../../db/connection.js"))
+      .query as jest.Mock;
+
+    const queriedRanges: Array<{ from: number; to: number }> = [];
+
+    mockQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      // getLastIndexedLedger — return persisted cursor
+      if (sql.includes("SELECT last_indexed_ledger")) {
+        return { rows: [{ last_indexed_ledger: 500 }], rowCount: 1 };
+      }
+      // updateLastIndexedLedger
+      if (sql.includes("UPDATE indexer_state")) {
+        return { rows: [], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    // Patch rpc to record the ledger range actually fetched
+    const indexer = makeIndexer();
+    (
+      indexer as unknown as {
+        rpc: { getLatestLedger: unknown; getEvents: unknown };
+      }
+    ).rpc = {
+      getLatestLedger: async () => ({ sequence: 600 }),
+      getEvents: async ({
+        startLedger,
+        endLedger,
+      }: {
+        startLedger: number;
+        endLedger: number;
+      }) => {
+        queriedRanges.push({ from: startLedger, to: endLedger });
+        return { events: [] };
+      },
+    };
+
+    await indexer.start();
+    await indexer.stop();
+
+    // Must have fetched starting from 501, not 0 or 1
+    expect(queriedRanges.length).toBeGreaterThan(0);
+    expect(queriedRanges[0].from).toBe(501);
+  });
+
   it("only the instance whose insert wins dispatches webhooks and notifications", async () => {
     // Two indexers ingest the same event concurrently. Instance A's insert
     // succeeds (rowCount=1); instance B hits ON CONFLICT DO NOTHING (rowCount=0).

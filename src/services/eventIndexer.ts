@@ -262,6 +262,8 @@ export class EventIndexer {
         return;
       }
 
+      logger.debug("Indexer advisory lock acquired — starting poll cycle");
+
       try {
         const lastIndexedLedger = await this.getLastIndexedLedger();
         const latestLedger = await this.getLatestLedgerSequence();
