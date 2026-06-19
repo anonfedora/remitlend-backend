@@ -15,6 +15,7 @@ import {
   listWebhookSubscriptions,
   reprocessQuarantinedEvents,
   reindexLedgerRange,
+  approveLoan,
 } from "../controllers/indexerController.js";
 import {
   listLoanDisputes,
@@ -22,6 +23,7 @@ import {
   getLoanDispute,
   rejectLoanDispute,
 } from "../controllers/adminDisputeController.js";
+import { approveLoanBodySchema } from "../schemas/loanSchemas.js";
 import { query } from "../db/connection.js";
 
 const router = Router();
@@ -106,6 +108,60 @@ router.post(
   requireJwtAuth,
   requireRoles("admin"),
   rejectLoanDispute,
+);
+
+/**
+ * @swagger
+ * /admin/approve-loan:
+ *   post:
+ *     summary: Build an unsigned approve_loan transaction for admin signing
+ *     description: >
+ *       Builds a Soroban `approve_loan(loanId)` transaction that the admin
+ *       must sign with their wallet and submit via the generic submit endpoint.
+ *     tags: [Admin]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [loanId]
+ *             properties:
+ *               loanId:
+ *                 type: integer
+ *                 minimum: 1
+ *                 description: ID of the loan to approve
+ *     responses:
+ *       200:
+ *         description: Unsigned transaction built successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 loanId:
+ *                   type: integer
+ *                 unsignedTxXdr:
+ *                   type: string
+ *                 networkPassphrase:
+ *                   type: string
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Admin authentication required
+ */
+router.post(
+  "/approve-loan",
+  requireJwtAuth,
+  requireRoles("admin"),
+  strictRateLimiter,
+  auditLog,
+  validateBody(approveLoanBodySchema),
+  approveLoan,
 );
 
 const checkDefaultsBodySchema = z.object({

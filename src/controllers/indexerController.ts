@@ -19,6 +19,8 @@ import {
 import { parseCappedLimit } from "../utils/queryHelpers.js";
 import logger from "../utils/logger.js";
 import { getStellarRpcUrl } from "../config/stellar.js";
+import { sorobanService } from "../services/sorobanService.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
 
 const buildEventFilters = (
   req: Request,
@@ -838,3 +840,38 @@ export const reprocessQuarantinedEvents = async (
     });
   }
 };
+
+/**
+ * POST /admin/approve-loan
+ * Builds an unsigned Soroban `approve_loan(loanId)` transaction
+ * for the admin to sign with their wallet.
+ */
+export const approveLoan = asyncHandler(async (req: Request, res: Response) => {
+  const { loanId } = req.body as { loanId: number };
+  const adminPublicKey = req.user?.publicKey;
+
+  if (!adminPublicKey) {
+    res.status(401).json({
+      success: false,
+      message: "Admin authentication required",
+    });
+    return;
+  }
+
+  const result = await sorobanService.buildApproveLoanTx(
+    adminPublicKey,
+    loanId,
+  );
+
+  logger.info("Admin approve_loan transaction built", {
+    admin: adminPublicKey,
+    loanId,
+  });
+
+  res.json({
+    success: true,
+    loanId,
+    unsignedTxXdr: result.unsignedTxXdr,
+    networkPassphrase: result.networkPassphrase,
+  });
+});

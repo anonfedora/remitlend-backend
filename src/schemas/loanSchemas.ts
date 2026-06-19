@@ -37,3 +37,7 @@ export const submitTxSchema = z.object({
     .min(1, "signedTxXdr is required")
     .regex(base64Regex, "Must be a valid base64 string"),
 });
+
+export const approveLoanBodySchema = z.object({
+  loanId: z.number().int().positive("Loan ID must be a positive integer"),
+});
