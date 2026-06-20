@@ -28,6 +28,7 @@ const mockLogger = {
   info: jest.fn(),
   warn: jest.fn(),
   error: jest.fn(),
+  debug: jest.fn(),
 };
 const supportedWebhookEventTypes = [
   "LoanRequested",
@@ -62,9 +63,26 @@ const supportedWebhookEventTypes = [
   "PoolUnpaused",
 ] as const;
 
+// Default advisory-lock client returned by getClient().
+// Returns acquired:true for pg_try_advisory_lock so that pollOnce() proceeds
+// normally in tests that call it directly. Tests that need a different
+// behaviour (e.g. lock-not-acquired) should override getClient on the mock.
+const mockLockClient = {
+  query: jest.fn(async (sql: string) => {
+    if (sql.includes("pg_try_advisory_lock")) {
+      return { rows: [{ acquired: true }], rowCount: 1 };
+    }
+    // pg_advisory_unlock
+    return { rows: [], rowCount: 0 };
+  }),
+  release: jest.fn(),
+};
+
 jest.unstable_mockModule("../db/connection.js", () => ({
   query: mockQuery,
-  getClient: jest.fn(),
+  getClient: jest
+    .fn<() => Promise<typeof mockLockClient>>()
+    .mockResolvedValue(mockLockClient),
   closePool: jest.fn(),
   withTransaction: jest.fn(
     async (

@@ -25,6 +25,8 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mockWithTransaction: jest.Mock<any>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mockGetClient: jest.Mock<any>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mockUpdateUserScoresBulk: jest.Mock<any>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mockSorobanGetScoreConfig: jest.Mock<any>;
@@ -90,6 +92,7 @@ let EventIndexer: any;
 
 beforeAll(async () => {
   mockWithTransaction = jest.fn<any>(); // eslint-disable-line @typescript-eslint/no-explicit-any
+  mockGetClient = jest.fn<any>(); // eslint-disable-line @typescript-eslint/no-explicit-any
   mockUpdateUserScoresBulk = jest.fn<any>().mockResolvedValue(undefined); // eslint-disable-line @typescript-eslint/no-explicit-any
   mockSorobanGetScoreConfig = jest
     .fn<any>() // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -101,7 +104,7 @@ beforeAll(async () => {
   jest.unstable_mockModule("../../db/connection.js", () => ({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     query: jest.fn<any>().mockResolvedValue({ rows: [], rowCount: 0 }),
-    getClient: jest.fn(),
+    getClient: mockGetClient,
     withTransaction: mockWithTransaction,
     TRANSIENT_ERROR_CODES: new Set(["08006", "57P01", "40001"]),
   }));
@@ -360,5 +363,183 @@ describe("EventIndexer – transaction atomicity via ingestRawEvents", () => {
 
     // withTransaction is the entry point instead
     expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Advisory lock — concurrent poll cycle deduplication
+// --------------------------------------------------------------------------
+
+describe("EventIndexer — advisory lock prevents concurrent poll cycles", () => {
+  afterEach(async () => {
+    // Reset getClient after each test in this block so the default
+    // (no implementation) doesn't bleed into the atomicity suite above.
+    mockGetClient.mockReset();
+  });
+
+  it("pollOnce skips all processing when another instance holds the advisory lock", async () => {
+    // Simulate a lock client that reports the lock as already taken.
+    const mockLockClient = {
+      query: jest.fn<any>().mockImplementation((sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          return Promise.resolve({ rows: [{ acquired: false }] });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+      release: jest.fn<any>(),
+    };
+    mockGetClient.mockResolvedValue(mockLockClient);
+
+    const indexer = makeIndexer();
+    await indexer.start();
+    await indexer.stop(); // clears the scheduled next-poll timeout
+
+    // The lock attempt was made
+    expect(mockLockClient.query).toHaveBeenCalledWith(
+      expect.stringContaining("pg_try_advisory_lock"),
+      expect.any(Array),
+    );
+    // pg_advisory_unlock must NOT be called — we never held the lock
+    const unlockCalls = (
+      (mockLockClient.query as jest.Mock).mock.calls as [string][]
+    ).filter(([sql]) => sql.includes("pg_advisory_unlock"));
+    expect(unlockCalls).toHaveLength(0);
+    // Lock client always released back to the pool
+    expect(mockLockClient.release).toHaveBeenCalledTimes(1);
+    // No event processing occurred
+    expect(mockWithTransaction).not.toHaveBeenCalled();
+    expect(mockWebhookDispatch).not.toHaveBeenCalled();
+    expect(mockNotificationCreate).not.toHaveBeenCalled();
+  });
+
+  it("lock is always released back to the pool even when processing throws", async () => {
+    const mockLockClient = {
+      query: jest.fn<any>().mockImplementation((sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          return Promise.resolve({ rows: [{ acquired: true }] });
+        }
+        // pg_advisory_unlock succeeds
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+      release: jest.fn<any>(),
+    };
+    mockGetClient.mockResolvedValue(mockLockClient);
+
+    // Make the pool-level query (getLastIndexedLedger) throw
+    const mockQuery = (await import("../../db/connection.js"))
+      .query as jest.Mock<() => Promise<never>>;
+    mockQuery.mockRejectedValueOnce(new Error("db unavailable"));
+
+    const indexer = makeIndexer();
+    // start() catches the error from pollOnce internally and schedules next poll
+    await indexer.start().catch(() => {});
+    await indexer.stop();
+
+    // Lock was acquired and then unlocked despite the error
+    const unlockCalls = (
+      (mockLockClient.query as jest.Mock).mock.calls as [string][]
+    ).filter(([sql]) => sql.includes("pg_advisory_unlock"));
+    expect(unlockCalls).toHaveLength(1);
+    // Client always returned to pool
+    expect(mockLockClient.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarted instance resumes from the persisted cursor, not from ledger 0", async () => {
+    // Simulate a stopped-then-restarted indexer. The DB holds last_indexed_ledger=500.
+    // The restarted instance must begin fetching from 501, not from 0.
+    const mockLockClient = {
+      query: jest.fn<any>().mockImplementation((sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          return Promise.resolve({ rows: [{ acquired: true }] });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+      release: jest.fn<any>(),
+    };
+    mockGetClient.mockResolvedValue(mockLockClient);
+
+    const mockQuery = (await import("../../db/connection.js"))
+      .query as jest.Mock;
+
+    const queriedRanges: Array<{ from: number; to: number }> = [];
+
+    (
+      mockQuery as jest.Mock<
+        (
+          sql: string,
+          params?: unknown[],
+        ) => Promise<{ rows: unknown[]; rowCount: number }>
+      >
+    ).mockImplementation(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes("SELECT last_indexed_ledger")) {
+        return { rows: [{ last_indexed_ledger: 500 }], rowCount: 1 };
+      }
+      if (sql.includes("UPDATE indexer_state")) {
+        return { rows: [], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    // Patch rpc to record the ledger range actually fetched
+    const indexer = makeIndexer();
+    (
+      indexer as unknown as {
+        rpc: { getLatestLedger: unknown; getEvents: unknown };
+      }
+    ).rpc = {
+      getLatestLedger: async () => ({ sequence: 600 }),
+      getEvents: async ({
+        startLedger,
+        endLedger,
+      }: {
+        startLedger: number;
+        endLedger: number;
+      }) => {
+        queriedRanges.push({ from: startLedger, to: endLedger });
+        return { events: [] };
+      },
+    };
+
+    await indexer.start();
+    await indexer.stop();
+
+    // Must have fetched starting from 501, not 0 or 1
+    expect(queriedRanges.length).toBeGreaterThan(0);
+    expect(queriedRanges[0]?.from).toBe(501);
+  });
+
+  it("only the instance whose insert wins dispatches webhooks and notifications", async () => {
+    // Two indexers ingest the same event concurrently. Instance A's insert
+    // succeeds (rowCount=1); instance B hits ON CONFLICT DO NOTHING (rowCount=0).
+    // Only A should dispatch webhooks and notifications.
+    const event = makeRawRepaidEvent("shared-event-001");
+
+    const mockClientA: MockClient = {
+      query: jest.fn<any>().mockResolvedValue({
+        rowCount: 1,
+        rows: [{ event_id: "shared-event-001" }],
+      }),
+    };
+    const mockClientB: MockClient = {
+      query: jest.fn<any>().mockResolvedValue({ rowCount: 0, rows: [] }),
+    };
+
+    const indexerA = makeIndexer();
+    const indexerB = makeIndexer();
+
+    mockWithTransaction.mockImplementationOnce(async (fn: TxCallback) =>
+      fn(mockClientA),
+    );
+    await indexerA.ingestRawEvents([event]);
+
+    mockWithTransaction.mockImplementationOnce(async (fn: TxCallback) =>
+      fn(mockClientB),
+    );
+    await indexerB.ingestRawEvents([event]);
+
+    // Webhook dispatched exactly once — by the instance that inserted the row
+    expect(mockWebhookDispatch).toHaveBeenCalledTimes(1);
+    // Notification created exactly once
+    expect(mockNotificationCreate).toHaveBeenCalledTimes(1);
   });
 });

@@ -5,6 +5,7 @@ const mockWithTransaction = jest.fn();
 
 jest.unstable_mockModule("../db/connection.js", () => ({
   query: jest.fn(),
+  getClient: jest.fn(),
   default: { query: jest.fn(), connect: jest.fn(), end: jest.fn() },
 }));
 
