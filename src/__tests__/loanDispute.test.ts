@@ -10,6 +10,7 @@ import { jest } from "@jest/globals";
 const mockQuery: any = jest.fn();
 jest.unstable_mockModule("../db/connection.js", () => ({
   query: mockQuery,
+  getClient: jest.fn(),
   default: { query: mockQuery, connect: jest.fn(), end: jest.fn() },
   withTransaction: jest.fn(),
 }));
