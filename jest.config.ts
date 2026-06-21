@@ -24,7 +24,6 @@ const config: Config = {
     },
   },
   moduleNameMapper: {
-    "^redis$": "<rootDir>/__mocks__/redis.js",
     "^(./|../)(.*)\\.js$": "$1$2",
   },
 };

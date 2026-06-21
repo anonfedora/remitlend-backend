@@ -11,7 +11,7 @@ RUN npm ci
 COPY tsconfig.json tsconfig.build.json ./
 COPY migrations ./migrations
 COPY src ./src
-RUN npx tsc -p tsconfig.build.json
+RUN npm run build
 
 # Production Stage
 FROM node:22-alpine AS production

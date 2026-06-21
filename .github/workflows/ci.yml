@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: remitlend
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:password@localhost:5432/remitlend
+      REDIS_URL: redis://localhost:6379
+      INTERNAL_API_KEY: test-api-key
+      JWT_SECRET: test-secret
+      NODE_ENV: test
+      STELLAR_RPC_URL: https://soroban-testnet.stellar.org
+      STELLAR_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+      LOAN_MANAGER_CONTRACT_ID: CDUMMYLOANMANAGERCONTRACTIDXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      LENDING_POOL_CONTRACT_ID: CDUMMYLENDINGPOOLCONTRACTIDXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      POOL_TOKEN_ADDRESS: CDUMMYPOOLTOKENADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      LOAN_MANAGER_ADMIN_SECRET: SDUMMYSECRETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      FRONTEND_URL: http://localhost:3000
+      SCORE_DELTA_REPAY: "10"
+      SCORE_DELTA_DEFAULT: "-50"
+      SCORE_DELTA_LATE: "-10"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format Check
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Run Database Migrations
+        run: npm run migrate:up
+
+      - name: Test
+        run: npm run test
