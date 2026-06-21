@@ -119,30 +119,72 @@ app.get("/", (req: Request, res: Response) => {
   res.send("RemitLend Backend is running");
 });
 
+// Per-dependency healthcheck timeout (ms). Keeps the /health endpoint from
+// hanging when a downstream probe stalls, which would otherwise block the
+// Docker HEALTHCHECK probe from ever completing.
+const HEALTH_CHECK_TIMEOUT_MS = Number.parseInt(
+  process.env.HEALTH_CHECK_TIMEOUT_MS ?? "2000",
+  10,
+);
+
+/**
+ * Race a promise against a timeout. If the promise does not settle within
+ * `ms`, resolve as `"error"` so the caller can record a degraded check
+ * without blocking the response.
+ */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 app.get(
   "/health",
   asyncHandler(async (_req: Request, res: Response) => {
-    const [databaseStatus, redisStatus, sorobanStatus] =
-      await Promise.allSettled([
+    const timeout = Number.isFinite(HEALTH_CHECK_TIMEOUT_MS)
+      ? HEALTH_CHECK_TIMEOUT_MS
+      : 2000;
+
+    // Each individual check is wrapped in a per-check timeout (see
+    // `withTimeout`) so that a hung dependency degrades to "error"
+    // rather than blocking the whole endpoint. Because the wrappers
+    // guarantee every promise resolves, `Promise.all` is safe here —
+    // switching back to `Promise.allSettled` would not preserve this
+    // fast-fail behaviour.
+    const [databaseResult, redisResult, sorobanResult] = await Promise.all([
+      withTimeout(
         pool
           .query("SELECT 1")
           .then(() => "ok" as const)
           .catch(() => "error" as const),
-        cacheService.ping(),
-        sorobanService.ping(),
-      ]);
+        timeout,
+        "error" as const,
+      ),
+      withTimeout(cacheService.ping(), timeout, "error" as const),
+      withTimeout(sorobanService.ping(), timeout, "error" as const),
+    ]);
 
     const dbChecks = {
-      database:
-        databaseStatus.status === "fulfilled" ? databaseStatus.value : "error",
-      redis: redisStatus.status === "fulfilled" ? redisStatus.value : "error",
+      database: databaseResult,
+      redis: redisResult,
     };
 
     const checks = {
       api: "ok" as const,
       ...dbChecks,
-      soroban_rpc:
-        sorobanStatus.status === "fulfilled" ? sorobanStatus.value : "error",
+      soroban_rpc: sorobanResult,
     };
 
     const coreOk = Object.values(dbChecks).every((c) => c === "ok");

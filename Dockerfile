@@ -32,4 +32,14 @@ USER appuser
 
 EXPOSE 3001
 
-CMD ["node", "dist/index.js"]
+# Healthcheck: probe the /health endpoint on the exposed port.
+# `wget` is bundled in busybox on the alpine image, so no extra packages are
+# required. `--spider` performs a HEAD-style check without downloading the
+# response body and exits non-zero for any HTTP 4xx/5xx (including our 503
+# "degraded" response) or network failure, which Docker correctly reports as
+# unhealthy. `--timeout=8` is a defense-in-depth bound so `wget` exits cleanly
+# before Docker's `--timeout=10s` SIGKILL kicks in.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD wget --spider --quiet --tries=1 --timeout=8 http://127.0.0.1:3001/health || exit 1
+
+CMD ["node", "dist/index.js"]  

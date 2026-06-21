@@ -66,3 +66,112 @@ describe("GET /health", () => {
     expect(typeof response.body.timestamp).toBe("number");
   });
 });
+
+describe("GET /health resilience", () => {
+  // Allow generous time for module re-imports + supertest boot on slow CI.
+  jest.setTimeout(15000);
+
+  const ORIGINAL_TIMEOUT_ENV = process.env.HEALTH_CHECK_TIMEOUT_MS;
+
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
+  afterEach(() => {
+    // Always restore the env so a failed assertion can't leak state into
+    // other tests in the suite.
+    if (ORIGINAL_TIMEOUT_ENV === undefined) {
+      delete process.env.HEALTH_CHECK_TIMEOUT_MS;
+    } else {
+      process.env.HEALTH_CHECK_TIMEOUT_MS = ORIGINAL_TIMEOUT_ENV;
+    }
+  });
+
+  it("returns within a bounded timeout when a dependency hangs", async () => {
+    // Force a tight per-check timeout so the assertion window is short
+    // and the test does not depend on the 2-second default.
+    process.env.HEALTH_CHECK_TIMEOUT_MS = "200";
+
+    jest.unstable_mockModule("../db/connection.js", () => ({
+      default: {
+        // Simulate a database that never settles — mirrors a stuck TCP socket.
+        query: jest.fn<() => Promise<unknown>>(
+          () => new Promise(() => {}) as Promise<unknown>,
+        ),
+      },
+      query: jest.fn<() => Promise<unknown>>(
+        () => new Promise(() => {}) as Promise<unknown>,
+      ),
+      getClient: jest.fn(),
+      withTransaction: jest.fn(),
+    }));
+
+    jest.unstable_mockModule("../services/cacheService.js", () => ({
+      cacheService: {
+        ping: jest.fn<() => Promise<string>>().mockResolvedValue("ok"),
+      },
+    }));
+
+    jest.unstable_mockModule("../services/sorobanService.js", () => ({
+      sorobanService: {
+        ping: jest.fn<() => Promise<string>>().mockResolvedValue("ok"),
+      },
+    }));
+
+    const { default: appWithStuckDb } = await import("../app.js");
+
+    const start = Date.now();
+    const response = await request(appWithStuckDb).get("/health");
+    const elapsed = Date.now() - start;
+
+    // The per-check timeout is 200ms; assert the endpoint failed fast
+    // with the hung dep marked as error, well under jest's 5s window.
+    expect(elapsed).toBeLessThan(1500);
+    expect(response.status).toBe(503);
+    expect(response.body.checks.database).toBe("error");
+    expect(response.body.status).toBe("down");
+  });
+
+  it("honors a tiny HEALTH_CHECK_TIMEOUT_MS override", async () => {
+    process.env.HEALTH_CHECK_TIMEOUT_MS = "1";
+
+    jest.unstable_mockModule("../db/connection.js", () => ({
+      default: {
+        query: jest.fn<() => Promise<unknown>>().mockResolvedValue({
+          rows: [],
+          rowCount: 0,
+        }),
+      },
+      query: jest.fn<() => Promise<unknown>>().mockResolvedValue({
+        rows: [],
+        rowCount: 0,
+      }),
+      getClient: jest.fn(),
+      withTransaction: jest.fn(),
+    }));
+
+    jest.unstable_mockModule("../services/cacheService.js", () => ({
+      cacheService: {
+        ping: jest.fn<() => Promise<string>>().mockResolvedValue("ok"),
+      },
+    }));
+
+    // A Soroban ping that hangs forever — the 1ms override must kick in.
+    jest.unstable_mockModule("../services/sorobanService.js", () => ({
+      sorobanService: {
+        ping: jest.fn<() => Promise<string>>(
+          () => new Promise(() => {}) as Promise<string>,
+        ),
+      },
+    }));
+
+    const { default: appWithCustomTimeout } = await import("../app.js");
+
+    const start = Date.now();
+    const response = await request(appWithCustomTimeout).get("/health");
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(1000);
+    expect(response.body.checks.soroban_rpc).toBe("error");
+  });
+});
